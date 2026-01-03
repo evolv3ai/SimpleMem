@@ -1,35 +1,18 @@
+# SimpleMem: Efficient Lifelong Memory for LLM Agents
+
 <div align="center">
 
-```
-╔═══════════════════════════════════════════════════════════╗
-║                                                           ║
-║     ███████╗██╗███╗   ███╗██████╗ ██╗     ███████╗      ║
-║     ██╔════╝██║████╗ ████║██╔══██╗██║     ██╔════╝      ║
-║     ███████╗██║██╔████╔██║██████╔╝██║     █████╗        ║
-║     ╚════██║██║██║╚██╔╝██║██╔═══╝ ██║     ██╔══╝        ║
-║     ███████║██║██║ ╚═╝ ██║██║     ███████╗███████╗      ║
-║     ╚══════╝╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚══════╝      ║
-║                                                           ║
-║           ███╗   ███╗███████╗███╗   ███╗                ║
-║           ████╗ ████║██╔════╝████╗ ████║                ║
-║           ██╔████╔██║█████╗  ██╔████╔██║                ║
-║           ██║╚██╔╝██║██╔══╝  ██║╚██╔╝██║                ║
-║           ██║ ╚═╝ ██║███████╗██║ ╚═╝ ██║                ║
-║           ╚═╝     ╚═╝╚══════╝╚═╝     ╚═╝                ║
-║                                                           ║
-║         Efficient Lifelong Memory for LLM Agents          ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
-```
+<p align="center">
+  <img src="fig/Fig_icon.png" width="70%">
+</p>
+
 
 [![Paper](https://img.shields.io/badge/📄_Paper-arXiv-b31b1b?style=for-the-badge)](https://arxiv.org)
 [![GitHub](https://img.shields.io/badge/💻_GitHub-SimpleMem-181717?logo=github&style=for-the-badge)](https://github.com/aiming-lab/SimpleMem)
 [![License](https://img.shields.io/badge/📜_License-MIT-green?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/🐍_Python-3.8+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 
-<img src="fig/Fig_framework.png" alt="SimpleMem Framework" width="900"/>
 
-*The SimpleMem Architecture: A three-stage pipeline for efficient lifelong memory through semantic lossless compression*
 
 </div>
 
@@ -82,6 +65,10 @@ Complexity-aware pruning across semantic, lexical, and symbolic layers
 </td>
 </tr>
 </table>
+
+<img src="fig/Fig_framework.png" alt="SimpleMem Framework" width="900"/>
+
+*The SimpleMem Architecture: A three-stage pipeline for efficient lifelong memory through semantic lossless compression*
 
 ---
 
