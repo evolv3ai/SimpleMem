@@ -7,10 +7,11 @@
 </p>
 
 
-[![Paper](https://img.shields.io/badge/📄_Paper-arXiv-b31b1b?style=for-the-badge)](https://arxiv.org/abs/2601.02553)
-[![GitHub](https://img.shields.io/badge/💻_GitHub-SimpleMem-181717?logo=github&style=for-the-badge)](https://github.com/aiming-lab/SimpleMem)
-[![Project Page](https://img.shields.io/badge/🌐_Project_Page-blue?style=for-the-badge)](https://aiming-lab.github.io/SimpleMem-Page)
-[![License](https://img.shields.io/badge/📜_License-MIT-green?style=for-the-badge)](LICENSE)
+[![Project Page](https://img.shields.io/badge/🎬_INTERACTIVE_DEMO-Visit_Our_Website-FF6B6B?style=for-the-badge&labelColor=FF6B6B&color=4ECDC4&logoColor=white)](https://aiming-lab.github.io/SimpleMem-Page)
+
+[![Paper](https://img.shields.io/badge/📄_Paper-arXiv-b31b1b?style=flat-square)](https://arxiv.org/abs/2601.02553)
+[![GitHub](https://img.shields.io/badge/GitHub-SimpleMem-181717?logo=github&style=flat-square)](https://github.com/aiming-lab/SimpleMem)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
 </div>
 
