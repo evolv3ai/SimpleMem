@@ -17,14 +17,13 @@ Streamable HTTP Transport:
 import asyncio
 import json
 import os
-import uuid
 import secrets
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from fastapi import FastAPI, HTTPException, Depends, Query, Request, Header, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
