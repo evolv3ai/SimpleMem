@@ -48,6 +48,7 @@ venv/
 ENV/
 env/
 .venv
+.venv2
 
 # IDE settings
 .vscode/
@@ -85,3 +86,5 @@ test_results/
 *.pth
 *.onnx
 docs/other
+*.txn
+*.lance
