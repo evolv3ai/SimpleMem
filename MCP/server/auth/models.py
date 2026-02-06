@@ -15,6 +15,7 @@ class User:
     user_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     openrouter_api_key_encrypted: str = ""
     litellm_api_key_encrypted: str = ""
+    embedding_api_key_encrypted: str = ""
     table_name: str = ""
     created_at: datetime = field(default_factory=datetime.utcnow)
     last_active: datetime = field(default_factory=datetime.utcnow)
@@ -30,6 +31,7 @@ class User:
             "user_id": self.user_id,
             "openrouter_api_key_encrypted": self.openrouter_api_key_encrypted,
             "litellm_api_key_encrypted": self.litellm_api_key_encrypted,
+            "embedding_api_key_encrypted": self.embedding_api_key_encrypted,
             "table_name": self.table_name,
             "created_at": self.created_at.isoformat(),
             "last_active": self.last_active.isoformat(),
@@ -41,6 +43,7 @@ class User:
             user_id=data["user_id"],
             openrouter_api_key_encrypted=data.get("openrouter_api_key_encrypted", ""),
             litellm_api_key_encrypted=data.get("litellm_api_key_encrypted", ""),
+            embedding_api_key_encrypted=data.get("embedding_api_key_encrypted", ""),
             table_name=data["table_name"],
             created_at=datetime.fromisoformat(data["created_at"]),
             last_active=datetime.fromisoformat(data["last_active"]),

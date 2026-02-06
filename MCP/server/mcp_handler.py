@@ -58,17 +58,26 @@ class MCPHandler:
     def __init__(
         self,
         user: User,
-        api_key: str,
+        llm_api_key: str,
+        embedding_api_key: str,
         vector_store: MultiTenantVectorStore,
         client_manager: ClientManager,
         settings: Any,
+        custom_table_suffix: Optional[str] = None,
     ):
         self.user = user
-        self.api_key = api_key
+        self.llm_api_key = llm_api_key
+        self.embedding_api_key = embedding_api_key
         self.vector_store = vector_store
         self.client_manager = client_manager
         self.settings = settings
         self.initialized = False
+
+        # Generate effective table name based on custom suffix
+        if custom_table_suffix:
+            self.effective_table_name = f"{user.table_name}_{custom_table_suffix}"
+        else:
+            self.effective_table_name = user.table_name
 
         # Lazy-loaded components
         self._memory_builder: Optional[MemoryBuilder] = None
@@ -76,44 +85,46 @@ class MCPHandler:
         self._answer_generator: Optional[AnswerGenerator] = None
 
     def _get_client(self):
-        return self.client_manager.get_client(self.api_key)
+        return self.client_manager.get_client(self.llm_api_key)
+
+    def _get_embedding_client(self):
+        # Use dedicated embedding client if manager supports it
+        if hasattr(self.client_manager, "get_embedding_client"):
+            # Use specific embedding key if configured
+            return self.client_manager.get_embedding_client(self.embedding_api_key)
+
+        # Fallback to standard client (which implies shared key/client)
+        # However, our http_server logic ensures embedding_api_key has a value (either distinct or same as llm)
+        # So logically we should try to use it if the manager supports it.
+        # But if manager doesn't support get_embedding_client, we must fallback to _get_client()
+        return self._get_client()
 
     def _get_memory_builder(self) -> MemoryBuilder:
         if not self._memory_builder:
-            embedding_client = (
-                self.client_manager.get_embedding_client(self.api_key)
-                if hasattr(self.client_manager, "get_embedding_client")
-                else self._get_client()
-            )
             self._memory_builder = MemoryBuilder(
                 llm_client=self._get_client(),
                 vector_store=self.vector_store,
-                table_name=self.user.table_name,
+                table_name=self.effective_table_name,
                 window_size=self.settings.window_size,
                 overlap_size=self.settings.overlap_size,
                 temperature=self.settings.llm_temperature,
-                embedding_client=embedding_client,
+                embedding_client=self._get_embedding_client(),
             )
         return self._memory_builder
 
     def _get_retriever(self) -> Retriever:
         if not self._retriever:
-            embedding_client = (
-                self.client_manager.get_embedding_client(self.api_key)
-                if hasattr(self.client_manager, "get_embedding_client")
-                else self._get_client()
-            )
             self._retriever = Retriever(
                 llm_client=self._get_client(),
                 vector_store=self.vector_store,
-                table_name=self.user.table_name,
+                table_name=self.effective_table_name,
                 semantic_top_k=self.settings.semantic_top_k,
                 keyword_top_k=self.settings.keyword_top_k,
                 enable_planning=self.settings.enable_planning,
                 enable_reflection=self.settings.enable_reflection,
                 max_reflection_rounds=self.settings.max_reflection_rounds,
                 temperature=self.settings.llm_temperature,
-                embedding_client=embedding_client,
+                embedding_client=self._get_embedding_client(),
             )
         return self._retriever
 
@@ -520,14 +531,14 @@ Use to check if memories are being stored correctly.""",
         }
 
     async def _tool_memory_clear(self, args: dict) -> dict:
-        success = await self.vector_store.clear_table(self.user.table_name)
+        success = await self.vector_store.clear_table(self.effective_table_name)
         return {
             "success": success,
             "message": "All memories cleared" if success else "Failed",
         }
 
     async def _tool_memory_stats(self, args: dict) -> dict:
-        stats = self.vector_store.get_stats(self.user.table_name)
+        stats = self.vector_store.get_stats(self.effective_table_name)
         builder = self._get_memory_builder()
         builder_stats = builder.get_stats()
         return {
@@ -562,10 +573,10 @@ Use to check if memories are being stored correctly.""",
         uri = params.get("uri", "")
 
         if uri.endswith("/stats"):
-            stats = self.vector_store.get_stats(self.user.table_name)
+            stats = self.vector_store.get_stats(self.effective_table_name)
             content = json.dumps(stats, ensure_ascii=False)
         elif uri.endswith("/all"):
-            entries = await self.vector_store.get_all_entries(self.user.table_name)
+            entries = await self.vector_store.get_all_entries(self.effective_table_name)
             content = json.dumps(
                 {
                     "entries": [e.to_dict() for e in entries],

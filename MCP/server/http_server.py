@@ -41,6 +41,7 @@ from .mcp_handler import MCPHandler
 
 import sys
 
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.settings import get_settings
 
@@ -51,6 +52,7 @@ from config.settings import get_settings
 class RegisterRequest(BaseModel):
     openrouter_api_key: Optional[str] = None
     litellm_api_key: Optional[str] = None
+    embedding_api_key: Optional[str] = None
 
 
 class RegisterResponse(BaseModel):
@@ -171,7 +173,11 @@ def generate_session_id() -> str:
 
 
 async def get_or_create_session(
-    user: User, api_key: str, session_id: Optional[str] = None
+    user: User,
+    llm_api_key: str,
+    embedding_api_key: str,
+    session_id: Optional[str] = None,
+    custom_table_suffix: Optional[str] = None,
 ) -> MCPSession:
     """Get existing session or create new one"""
     async with _session_lock:
@@ -184,16 +190,18 @@ async def get_or_create_session(
         new_session_id = generate_session_id()
         handler = MCPHandler(
             user=user,
-            api_key=api_key,
+            llm_api_key=llm_api_key,
+            embedding_api_key=embedding_api_key,
             vector_store=vector_store,
             client_manager=client_manager,
             settings=settings,
+            custom_table_suffix=custom_table_suffix,
         )
         session = MCPSession(
             session_id=new_session_id,
             user_id=user.user_id,
             user=user,
-            api_key=api_key,
+            api_key=llm_api_key,  # Store primary key
             handler=handler,
         )
         _sessions[new_session_id] = session
@@ -221,10 +229,24 @@ async def delete_session(session_id: str) -> bool:
 # === Authentication Helper ===
 
 
-async def verify_bearer_token(authorization: Optional[str]) -> tuple[User, str]:
+def validate_table_suffix(suffix: str) -> bool:
+    """
+    Validate custom table suffix.
+    Must be alphanumeric, underscore, or hyphen, max 64 chars.
+    """
+    if not suffix:
+        return False
+    if len(suffix) > 64:
+        return False
+    import re
+
+    return bool(re.match(r"^[a-zA-Z0-9_-]+$", suffix))
+
+
+async def verify_bearer_token(authorization: Optional[str]) -> tuple[User, str, str]:
     """
     Verify Bearer token from Authorization header.
-    Returns (user, api_key) tuple.
+    Returns (user, llm_api_key, embedding_api_key) tuple.
     Raises HTTPException on failure.
     """
     if not authorization:
@@ -258,12 +280,21 @@ async def verify_bearer_token(authorization: Optional[str]) -> tuple[User, str]:
     # Get the appropriate API key based on what's available
     # Priority: litellm key (if provider is litellm and key exists) > openrouter key
     if user.litellm_api_key_encrypted:
-        api_key = token_manager.decrypt_api_key(user.litellm_api_key_encrypted)
+        llm_api_key = token_manager.decrypt_api_key(user.litellm_api_key_encrypted)
     elif user.openrouter_api_key_encrypted:
-        api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+        llm_api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
     else:
         raise HTTPException(status_code=401, detail="No API key found for user")
-    return user, api_key
+
+    # Use embedding API key if set, otherwise fall back to LLM API key
+    if user.embedding_api_key_encrypted:
+        embedding_api_key = token_manager.decrypt_api_key(
+            user.embedding_api_key_encrypted
+        )
+    else:
+        embedding_api_key = llm_api_key
+
+    return user, llm_api_key, embedding_api_key
 
 
 # === Lifecycle ===
@@ -400,6 +431,11 @@ async def register(request: RegisterRequest):
             user = User()
             user.openrouter_api_key_encrypted = token_manager.encrypt_api_key(api_key)
 
+        if request.embedding_api_key:
+            user.embedding_api_key_encrypted = token_manager.encrypt_api_key(
+                request.embedding_api_key
+            )
+
         # Save user
         user_store.create_user(user)
 
@@ -491,17 +527,31 @@ async def server_info():
 # === MCP Protocol Endpoints (Streamable HTTP - 2025-03-26 spec) ===
 
 
-def _get_mcp_handler(user: User, api_key: str) -> MCPHandler:
+def _get_mcp_handler(
+    user: User,
+    llm_api_key: str,
+    embedding_api_key: str,
+    custom_table_suffix: Optional[str] = None,
+) -> MCPHandler:
     """Get or create MCP handler for user (legacy)"""
-    if user.user_id not in _mcp_handlers:
-        _mcp_handlers[user.user_id] = MCPHandler(
+    # For legacy support, we don't cache handlers with custom suffixes
+    cache_key = (
+        user.user_id
+        if not custom_table_suffix
+        else f"{user.user_id}_{custom_table_suffix}"
+    )
+
+    if cache_key not in _mcp_handlers:
+        _mcp_handlers[cache_key] = MCPHandler(
             user=user,
-            api_key=api_key,
+            llm_api_key=llm_api_key,
+            embedding_api_key=embedding_api_key,
             vector_store=vector_store,
             client_manager=client_manager,
             settings=settings,
+            custom_table_suffix=custom_table_suffix,
         )
-    return _mcp_handlers[user.user_id]
+    return _mcp_handlers[cache_key]
 
 
 def _is_initialize_request(data: dict | list) -> bool:
@@ -533,6 +583,7 @@ async def mcp_post_endpoint(
     request: Request,
     authorization: Optional[str] = Header(None),
     mcp_session_id: Optional[str] = Header(None, alias="Mcp-Session-Id"),
+    x_simplemem_table: Optional[str] = Header(None, alias="X-SimpleMem-Table"),
 ):
     """
     Streamable HTTP POST endpoint (MCP 2025-03-26 spec).
@@ -543,6 +594,7 @@ async def mcp_post_endpoint(
     - Authorization: Bearer <token> (required)
     - Accept: application/json, text/event-stream (required)
     - Mcp-Session-Id: <session-id> (required after initialization)
+    - X-SimpleMem-Table: <custom_table_suffix> (optional, for per-user table separation)
 
     Request body: JSON-RPC request, notification, response, or array of them.
 
@@ -559,8 +611,18 @@ async def mcp_post_endpoint(
         )
 
     # Authenticate
-    user, api_key = await verify_bearer_token(authorization)
+    user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
     user_store.update_last_active(user.user_id)
+
+    # Validate custom table suffix if provided
+    custom_table_suffix = None
+    if x_simplemem_table:
+        if not validate_table_suffix(x_simplemem_table):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid X-SimpleMem-Table header. Must be alphanumeric, underscore, or hyphen, max 64 chars.",
+            )
+        custom_table_suffix = x_simplemem_table
 
     # Parse request body
     try:
@@ -577,7 +639,12 @@ async def mcp_post_endpoint(
 
     # Handle initialization (creates new session)
     if _is_initialize_request(data):
-        session = await get_or_create_session(user, api_key)
+        session = await get_or_create_session(
+            user,
+            llm_api_key,
+            embedding_api_key,
+            custom_table_suffix=custom_table_suffix,
+        )
         session.initialized = True
 
         # Process the initialize request
@@ -602,7 +669,12 @@ async def mcp_post_endpoint(
     if not session:
         # Auto-create new session for expired sessions (MCP client compatibility)
         # This allows MCP clients to seamlessly recover from expired sessions
-        session = await get_or_create_session(user, api_key)
+        session = await get_or_create_session(
+            user,
+            llm_api_key,
+            embedding_api_key,
+            custom_table_suffix=custom_table_suffix,
+        )
         session.initialized = True
         # Optionally log the session recovery
         print(
@@ -659,7 +731,7 @@ async def mcp_get_endpoint(
         )
 
     # Authenticate
-    user, api_key = await verify_bearer_token(authorization)
+    user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
 
     # Session ID required for GET
     if not mcp_session_id:
@@ -739,7 +811,7 @@ async def mcp_delete_endpoint(
     - Mcp-Session-Id: <session-id> (required)
     """
     # Authenticate
-    user, api_key = await verify_bearer_token(authorization)
+    user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
 
     if not mcp_session_id:
         raise HTTPException(status_code=400, detail="Mcp-Session-Id header required")
@@ -780,7 +852,7 @@ async def mcp_sse_endpoint_legacy(
     """
     # Try to get token from header first, then query param
     if authorization:
-        user, api_key = await verify_bearer_token(authorization)
+        user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
     elif token:
         is_valid, payload, error = token_manager.verify_token(token)
         if not is_valid:
@@ -788,12 +860,19 @@ async def mcp_sse_endpoint_legacy(
         user = user_store.get_user(payload.user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+        llm_api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+        # Use embedding API key if set, otherwise fall back to LLM API key
+        if user.embedding_api_key_encrypted:
+            embedding_api_key = token_manager.decrypt_api_key(
+                user.embedding_api_key_encrypted
+            )
+        else:
+            embedding_api_key = llm_api_key
     else:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     # Create session for legacy client
-    session = await get_or_create_session(user, api_key)
+    session = await get_or_create_session(user, llm_api_key, embedding_api_key)
 
     # Get base URL
     base_url = os.getenv("MCP_BASE_URL", "")
@@ -845,15 +924,15 @@ async def mcp_message_endpoint_legacy(
 
     # Try to authenticate and get session
     if authorization:
-        user, api_key = await verify_bearer_token(authorization)
+        user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
         if sid:
             session = await get_session(sid)
             if session and session.user_id == user.user_id:
                 handler = session.handler
             else:
-                handler = _get_mcp_handler(user, api_key)
+                handler = _get_mcp_handler(user, llm_api_key, embedding_api_key)
         else:
-            handler = _get_mcp_handler(user, api_key)
+            handler = _get_mcp_handler(user, llm_api_key, embedding_api_key)
     elif token:
         is_valid, payload, error = token_manager.verify_token(token)
         if not is_valid:
@@ -861,8 +940,15 @@ async def mcp_message_endpoint_legacy(
         user = user_store.get_user(payload.user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
-        handler = _get_mcp_handler(user, api_key)
+        llm_api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+        # Use embedding API key if set, otherwise fall back to LLM API key
+        if user.embedding_api_key_encrypted:
+            embedding_api_key = token_manager.decrypt_api_key(
+                user.embedding_api_key_encrypted
+            )
+        else:
+            embedding_api_key = llm_api_key
+        handler = _get_mcp_handler(user, llm_api_key, embedding_api_key)
     elif sid:
         # Try to get session by ID
         session = await get_session(sid)
