@@ -82,10 +82,11 @@ class MemoryEntry:
     lossless_restatement: str = ""
     keywords: list = field(default_factory=list)
     timestamp: Optional[str] = None
-    location: Optional[str] = None
     persons: list = field(default_factory=list)
     entities: list = field(default_factory=list)
     topic: Optional[str] = None
+    agents: list = field(default_factory=list)
+    source: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -93,10 +94,11 @@ class MemoryEntry:
             "lossless_restatement": self.lossless_restatement,
             "keywords": self.keywords,
             "timestamp": self.timestamp,
-            "location": self.location,
             "persons": self.persons,
             "entities": self.entities,
             "topic": self.topic,
+            "agents": self.agents,
+            "source": self.source,
         }
 
     @classmethod
@@ -106,10 +108,11 @@ class MemoryEntry:
             lossless_restatement=data.get("lossless_restatement", ""),
             keywords=data.get("keywords", []),
             timestamp=data.get("timestamp"),
-            location=data.get("location"),
             persons=data.get("persons", []),
             entities=data.get("entities", []),
             topic=data.get("topic"),
+            agents=data.get("agents", []),
+            source=data.get("source"),
         )
 
 

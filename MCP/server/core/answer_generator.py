@@ -77,10 +77,23 @@ class AnswerGenerator:
 
                 data = self.client.extract_json(response)
                 if data:
+                    # Parse used context indices
+                    used_indices = data.get("used_contexts", [])
+                    if isinstance(used_indices, list):
+                        # Convert to 0-indexed and filter valid indices
+                        used_indices = [
+                            i - 1
+                            for i in used_indices
+                            if isinstance(i, int) and 1 <= i <= len(contexts)
+                        ]
+                    else:
+                        used_indices = []
+
                     return {
                         "answer": data.get("answer", "Unable to generate answer."),
                         "reasoning": data.get("reasoning", ""),
                         "confidence": data.get("confidence", "medium"),
+                        "used_context_indices": used_indices,
                     }
 
             except Exception as e:
@@ -90,12 +103,14 @@ class AnswerGenerator:
                         "answer": "An error occurred while generating the answer.",
                         "reasoning": f"Error: {str(e)}",
                         "confidence": "low",
+                        "used_context_indices": [],
                     }
 
         return {
             "answer": "Unable to generate answer after multiple attempts.",
             "reasoning": "JSON parsing failed.",
             "confidence": "low",
+            "used_context_indices": [],
         }
 
     def _format_contexts(self, contexts: List[MemoryEntry]) -> str:
@@ -108,14 +123,14 @@ class AnswerGenerator:
             metadata = []
             if entry.timestamp:
                 metadata.append(f"Time: {entry.timestamp}")
-            if entry.location:
-                metadata.append(f"Location: {entry.location}")
             if entry.persons:
                 metadata.append(f"Persons: {', '.join(entry.persons)}")
             if entry.entities:
                 metadata.append(f"Entities: {', '.join(entry.entities)}")
             if entry.topic:
                 metadata.append(f"Topic: {entry.topic}")
+            if entry.source:
+                metadata.append(f"Source: {entry.source}")
 
             if metadata:
                 parts.append(f"   ({'; '.join(metadata)})")
@@ -140,6 +155,7 @@ class AnswerGenerator:
 3. Provide a CONCISE answer (short phrase or 1-2 sentences)
 4. Format dates as 'DD Month YYYY' (e.g., "15 January 2025")
 5. If context is insufficient, clearly state that
+6. List the context numbers (e.g., [1], [2]) you used to answer the question
 
 ## Confidence Levels:
 - "high": Context directly answers the question
@@ -150,7 +166,8 @@ class AnswerGenerator:
 {{
   "reasoning": "Brief explanation of how you derived the answer",
   "answer": "Concise answer to the question",
-  "confidence": "high/medium/low"
+  "confidence": "high/medium/low",
+  "used_contexts": [1, 2, 3]
 }}
 
 Return ONLY valid JSON. No other text."""
@@ -174,10 +191,9 @@ Return ONLY valid JSON. No other text."""
             return "No memories to summarize."
 
         # Format entries
-        entries_text = "\n".join([
-            f"- {entry.lossless_restatement}"
-            for entry in entries[:50]
-        ])
+        entries_text = "\n".join(
+            [f"- {entry.lossless_restatement}" for entry in entries[:50]]
+        )
 
         topic_str = f" about {topic}" if topic else ""
 

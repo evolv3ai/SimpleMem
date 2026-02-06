@@ -34,8 +34,12 @@ class MemoryBuilder:
         window_size: int = 40,  # Max dialogues per LLM call
         overlap_size: int = 2,
         temperature: float = 0.1,
+        embedding_client: Optional[LLMClient] = None,
     ):
         self.client = llm_client
+        self.embedding_client = (
+            embedding_client or llm_client
+        )  # Use embedding client if provided, otherwise use LLM client
         self.vector_store = vector_store
         self.table_name = table_name
         self.window_size = window_size
@@ -51,6 +55,8 @@ class MemoryBuilder:
         speaker: str,
         content: str,
         timestamp: Optional[str] = None,
+        agents: Optional[str] = None,
+        source: Optional[str] = None,
         auto_process: bool = True,
     ) -> dict:
         """
@@ -60,6 +66,8 @@ class MemoryBuilder:
             speaker: Speaker name
             content: Dialogue content
             timestamp: Optional ISO 8601 timestamp
+            agents: Optional comma-separated agent identifiers (e.g., "TXN_AGENT,REFUND_AGENT")
+            source: Optional source of the information
             auto_process: Ignored (always processes immediately)
 
         Returns:
@@ -72,6 +80,9 @@ class MemoryBuilder:
             timestamp=timestamp or datetime.utcnow().isoformat(),
         )
 
+        # Parse agents string into list
+        agents_list = self._parse_agents(agents)
+
         # Process immediately
         entries = await self._generate_memory_entries([dialogue])
 
@@ -83,9 +94,14 @@ class MemoryBuilder:
                 "message": "No extractable information found",
             }
 
+        # Assign agents and source to all entries
+        for entry in entries:
+            entry.agents = agents_list
+            entry.source = source
+
         # Generate embeddings
         texts = [entry.lossless_restatement for entry in entries]
-        embeddings = await self.client.create_embedding(texts)
+        embeddings = await self.embedding_client.create_embedding(texts)
 
         # Store entries
         count = await self.vector_store.add_entries(
@@ -126,28 +142,52 @@ class MemoryBuilder:
                 "message": "No dialogues provided",
             }
 
-        # Convert to Dialogue objects
+        # Convert to Dialogue objects and collect agents
         dialogue_objects = []
+        dialogue_agents = []
+        dialogue_sources = []
         for i, dlg in enumerate(dialogues):
-            dialogue_objects.append(Dialogue(
-                dialogue_id=self._total_processed + i + 1,
-                speaker=dlg.get("speaker", ""),
-                content=dlg.get("content", ""),
-                timestamp=dlg.get("timestamp") or datetime.utcnow().isoformat(),
-            ))
+            dialogue_objects.append(
+                Dialogue(
+                    dialogue_id=self._total_processed + i + 1,
+                    speaker=dlg.get("speaker", ""),
+                    content=dlg.get("content", ""),
+                    timestamp=dlg.get("timestamp") or datetime.utcnow().isoformat(),
+                )
+            )
+            # Parse agents for each dialogue
+            dialogue_agents.append(self._parse_agents(dlg.get("agents")))
+            dialogue_sources.append(dlg.get("source"))
 
         total_entries = 0
 
         # Process in windows if too many dialogues
         for i in range(0, len(dialogue_objects), self.window_size):
-            window = dialogue_objects[i:i + self.window_size]
+            window = dialogue_objects[i : i + self.window_size]
 
             entries = await self._generate_memory_entries(window)
 
             if entries:
+                # Get agents and source for this window (use first dialogue's data for all entries in window)
+                window_start_idx = i
+                window_agents = (
+                    dialogue_agents[window_start_idx]
+                    if window_start_idx < len(dialogue_agents)
+                    else []
+                )
+                window_source = (
+                    dialogue_sources[window_start_idx]
+                    if window_start_idx < len(dialogue_sources)
+                    else None
+                )
+
+                # Assign agents and source to all entries
+                for entry in entries:
+                    entry.agents = window_agents
+                    entry.source = window_source
                 # Generate embeddings
                 texts = [entry.lossless_restatement for entry in entries]
-                embeddings = await self.client.create_embedding(texts)
+                embeddings = await self.embedding_client.create_embedding(texts)
 
                 # Store entries
                 count = await self.vector_store.add_entries(
@@ -216,7 +256,9 @@ class MemoryBuilder:
                     continue
 
                 # Handle both list and dict with "entries" key
-                entries_data = data if isinstance(data, list) else data.get("entries", [])
+                entries_data = (
+                    data if isinstance(data, list) else data.get("entries", [])
+                )
 
                 entries = []
                 for item in entries_data:
@@ -225,7 +267,6 @@ class MemoryBuilder:
                         lossless_restatement=item.get("lossless_restatement", ""),
                         keywords=item.get("keywords", []),
                         timestamp=item.get("timestamp"),
-                        location=item.get("location"),
                         persons=item.get("persons", []),
                         entities=item.get("entities", []),
                         topic=item.get("topic"),
@@ -287,7 +328,6 @@ class MemoryBuilder:
    - `lossless_restatement`: Complete, unambiguous fact
    - `keywords`: Core terms for search (3-7 keywords)
    - `timestamp`: ISO 8601 format if mentioned
-   - `location`: Specific location name
    - `persons`: All person names involved
    - `entities`: Companies, products, organizations, etc.
    - `topic`: Brief topic phrase (2-5 words)
@@ -299,7 +339,6 @@ class MemoryBuilder:
       "lossless_restatement": "Complete self-contained fact...",
       "keywords": ["keyword1", "keyword2", ...],
       "timestamp": "2025-01-15T14:00:00" or null,
-      "location": "Starbucks, Downtown" or null,
       "persons": ["Alice", "Bob"],
       "entities": ["Company XYZ"] or [],
       "topic": "Meeting arrangement"
@@ -325,3 +364,11 @@ Return ONLY valid JSON. No explanations or other text."""
         return {
             "total_dialogues_processed": self._total_processed,
         }
+
+    def _parse_agents(self, agents: Optional[str]) -> List[str]:
+        """Parse comma-separated agents string into list"""
+        if not agents:
+            return []
+        if isinstance(agents, list):
+            return agents
+        return [a.strip() for a in agents.split(",") if a.strip()]
