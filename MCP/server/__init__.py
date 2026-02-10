@@ -8,5 +8,5 @@ This package can be used standalone or mounted in an existing FastAPI applicatio
 
 from .app_factory import create_app
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __all__ = ["create_app"]

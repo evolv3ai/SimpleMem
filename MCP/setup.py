@@ -13,16 +13,15 @@ long_description = (
 
 setup(
     name="simplemem-mcp",
-    version="1.0.0",
+    version="1.0.1",
     author="SimpleMem Team",
     author_email="",
     description="Multi-tenant Memory Service for LLM Agents via MCP Protocol",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/simplemem-mcp",
-    packages=find_packages(
-        exclude=["tests", "examples", "reference", "frontend", "data", ".venv2"]
-    ),
+    packages=["simplemem_mcp"]
+    + ["simplemem_mcp." + pkg for pkg in find_packages("server")],
     package_dir={"simplemem_mcp": "server"},  # Map simplemem_mcp to server folder
     python_requires=">=3.10",
     install_requires=[
