@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simplemem-mcp"
-version = "1.0.2"
+dynamic = ["version"]
 description = "Multi-tenant Memory Service for LLM Agents via MCP Protocol"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,11 +47,5 @@ dev = [
 [project.scripts]
 simplemem-mcp = "simplemem_mcp.__main__:main"
 
-[tool.setuptools]
-packages = ["simplemem_mcp", "config"]
-
-[tool.setuptools.package-dir]
-simplemem_mcp = "server"
-
-[tool.setuptools.package-data]
-"*" = ["*.md", "*.txt"]
+[tool.setuptools.dynamic]
+version = {attr = "server.__init__.__version__"}
