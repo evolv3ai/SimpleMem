@@ -13,7 +13,7 @@ long_description = (
 
 setup(
     name="simplemem-mcp",
-    version="1.0.1",
+    version="1.0.2",
     author="SimpleMem Team",
     author_email="",
     description="Multi-tenant Memory Service for LLM Agents via MCP Protocol",

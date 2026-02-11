@@ -71,6 +71,24 @@
                 </div>
 
                 <div class="config-section">
+                    <h3>Memory Management</h3>
+                    <p class="description">Manage your stored memories.</p>
+                    
+                    <div class="input-group">
+                        <label for="delete-id">Entry ID or Ref ID</label>
+                        <div class="row">
+                            <input type="text" id="delete-id" placeholder="Enter ID to delete">
+                            <select id="delete-type">
+                                <option value="entry_id">Entry ID</option>
+                                <option value="ref_id">Ref ID</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button class="secondary-btn" onclick="handleDelete()" id="delete-btn">Delete Memory</button>
+                    <p id="delete-status" class="status-msg"></p>
+                </div>
+
+                <div class="config-section">
                     <h3>MCP JSON Configuration</h3>
                     <p class="description">Add this to your MCP client settings (Streamable HTTP):</p>
                     <pre id="claude-config"></pre>

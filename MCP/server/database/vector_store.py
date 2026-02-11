@@ -27,6 +27,7 @@ def get_memory_schema(embedding_dimension: int = 2560) -> pa.Schema:
             pa.field("topic", pa.string()),
             pa.field("agents", pa.list_(pa.string())),
             pa.field("source", pa.string()),
+            pa.field("ref_id", pa.string()),
             pa.field("vector", pa.list_(pa.float32(), embedding_dimension)),
             pa.field("created_at", pa.string()),
         ]
@@ -108,6 +109,7 @@ class MultiTenantVectorStore:
                     "topic": entry.topic or "",
                     "agents": entry.agents or [],
                     "source": entry.source or "",
+                    "ref_id": entry.ref_id or "",
                     "vector": embedding,
                     "created_at": created_at,
                 }
@@ -162,6 +164,7 @@ class MultiTenantVectorStore:
                         topic=row["topic"] if row["topic"] else None,
                         agents=list(row["agents"]) if row["agents"] is not None else [],
                         source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
                     )
                 )
 
@@ -242,6 +245,7 @@ class MultiTenantVectorStore:
                         topic=row["topic"] if row["topic"] else None,
                         agents=list(row["agents"]) if row["agents"] is not None else [],
                         source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
                     )
                 )
 
@@ -344,6 +348,7 @@ class MultiTenantVectorStore:
                         topic=row["topic"] if row["topic"] else None,
                         agents=list(row["agents"]) if row["agents"] is not None else [],
                         source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
                     )
                 )
 
@@ -382,6 +387,7 @@ class MultiTenantVectorStore:
                         topic=row["topic"] if row["topic"] else None,
                         agents=list(row["agents"]) if row["agents"] is not None else [],
                         source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
                     )
                 )
 
@@ -429,6 +435,43 @@ class MultiTenantVectorStore:
 
         except Exception as e:
             print(f"Delete table error: {e}")
+            return False
+
+    def _escape_string(self, s: str) -> str:
+        """Escape single quotes for SQL/filter strings"""
+        return s.replace("'", "''")
+
+    async def delete_entries(
+        self,
+        table_name: str,
+        entry_ids: Optional[List[str]] = None,
+        ref_ids: Optional[List[str]] = None,
+    ) -> bool:
+        """
+        Delete entries by entry_id or ref_id.
+        Deleting by ref_id removes ALL entries with that ref_id.
+        """
+        try:
+            table = self._get_table(table_name)
+
+            if entry_ids:
+                # Delete by entry_id
+                entry_ids_str = ", ".join(
+                    [f"'{self._escape_string(eid)}'" for eid in entry_ids]
+                )
+                table.delete(f"entry_id IN ({entry_ids_str})")
+
+            if ref_ids:
+                # Delete by ref_id (removes all matches)
+                ref_ids_str = ", ".join(
+                    [f"'{self._escape_string(rid)}'" for rid in ref_ids]
+                )
+                table.delete(f"ref_id IN ({ref_ids_str})")
+
+            return True
+
+        except Exception as e:
+            print(f"Delete entries error: {e}")
             return False
 
     def get_stats(self, table_name: str) -> Dict[str, Any]:

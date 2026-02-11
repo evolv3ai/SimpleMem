@@ -57,6 +57,7 @@ class MemoryBuilder:
         timestamp: Optional[str] = None,
         agents: Optional[str] = None,
         source: Optional[str] = None,
+        ref_id: Optional[str] = None,
         auto_process: bool = True,
     ) -> dict:
         """
@@ -67,7 +68,9 @@ class MemoryBuilder:
             content: Dialogue content
             timestamp: Optional ISO 8601 timestamp
             agents: Optional comma-separated agent identifiers (e.g., "TXN_AGENT,REFUND_AGENT")
+            agents: Optional comma-separated agent identifiers (e.g., "TXN_AGENT,REFUND_AGENT")
             source: Optional source of the information
+            ref_id: Optional external reference ID
             auto_process: Ignored (always processes immediately)
 
         Returns:
@@ -98,6 +101,7 @@ class MemoryBuilder:
         for entry in entries:
             entry.agents = agents_list
             entry.source = source
+            entry.ref_id = ref_id
 
         # Generate embeddings
         texts = [entry.lossless_restatement for entry in entries]
@@ -146,6 +150,7 @@ class MemoryBuilder:
         dialogue_objects = []
         dialogue_agents = []
         dialogue_sources = []
+        dialogue_ref_ids = []
         for i, dlg in enumerate(dialogues):
             dialogue_objects.append(
                 Dialogue(
@@ -158,6 +163,7 @@ class MemoryBuilder:
             # Parse agents for each dialogue
             dialogue_agents.append(self._parse_agents(dlg.get("agents")))
             dialogue_sources.append(dlg.get("source"))
+            dialogue_ref_ids.append(dlg.get("ref_id"))
 
         total_entries = 0
 
@@ -180,11 +186,17 @@ class MemoryBuilder:
                     if window_start_idx < len(dialogue_sources)
                     else None
                 )
+                window_ref_id = (
+                    dialogue_ref_ids[window_start_idx]
+                    if window_start_idx < len(dialogue_ref_ids)
+                    else None
+                )
 
                 # Assign agents and source to all entries
                 for entry in entries:
                     entry.agents = window_agents
                     entry.source = window_source
+                    entry.ref_id = window_ref_id
                 # Generate embeddings
                 texts = [entry.lossless_restatement for entry in entries]
                 embeddings = await self.embedding_client.create_embedding(texts)

@@ -90,6 +90,7 @@ class MemoryEntry:
     topic: Optional[str] = None
     agents: list = field(default_factory=list)
     source: Optional[str] = None
+    ref_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -102,6 +103,7 @@ class MemoryEntry:
             "topic": self.topic,
             "agents": self.agents,
             "source": self.source,
+            "ref_id": self.ref_id,
         }
 
     @classmethod
@@ -116,6 +118,7 @@ class MemoryEntry:
             topic=data.get("topic"),
             agents=data.get("agents", []),
             source=data.get("source"),
+            ref_id=data.get("ref_id"),
         )
 
 

@@ -275,6 +275,10 @@ Example: memory_add(speaker="Alice", content="I'll meet Bob at Starbucks tomorro
                                 "type": "string",
                                 "description": "Optional source of the information (e.g., 'API', 'User Input', 'Database')",
                             },
+                            "ref_id": {
+                                "type": "string",
+                                "description": "Optional reference ID for the memory entry (not passed to LLMs)",
+                            },
                         },
                         "required": ["content"],
                     },
@@ -317,6 +321,10 @@ All dialogues are processed immediately and stored. No manual flush needed.""",
                                         "source": {
                                             "type": "string",
                                             "description": "Optional source of the information",
+                                        },
+                                        "ref_id": {
+                                            "type": "string",
+                                            "description": "Optional reference ID",
                                         },
                                     },
                                     "required": ["content"],
@@ -389,6 +397,26 @@ Each entry contains: content (self-contained fact), timestamp, persons, entities
                     },
                 },
                 {
+                    "name": "memory_delete",
+                    "description": """Delete memory entries by entry_id or ref_id.
+                    
+                    Provide either 'entry_id' to delete a specific memory, or 'ref_id' to delete all memories associated with that reference ID.
+                    At least one identifier must be provided.""",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "entry_id": {
+                                "type": "string",
+                                "description": "ID of the specific memory entry to delete",
+                            },
+                            "ref_id": {
+                                "type": "string",
+                                "description": "Reference ID to delete (removes ALL matching entries)",
+                            },
+                        },
+                    },
+                },
+                {
                     "name": "memory_clear",
                     "description": """Clear ALL memories for this user. This action CANNOT be undone.
 
@@ -425,6 +453,7 @@ Use to check if memories are being stored correctly.""",
             "memory_add_batch": self._tool_memory_add_batch,
             "memory_query": self._tool_memory_query,
             "memory_retrieve": self._tool_memory_retrieve,
+            "memory_delete": self._tool_memory_delete,
             "memory_clear": self._tool_memory_clear,
             "memory_stats": self._tool_memory_stats,
         }
@@ -451,6 +480,7 @@ Use to check if memories are being stored correctly.""",
             timestamp=args.get("timestamp"),
             agents=args.get("agents"),
             source=args.get("source"),
+            ref_id=args.get("ref_id"),
         )
 
     async def _tool_memory_add_batch(self, args: dict) -> dict:
@@ -524,10 +554,37 @@ Use to check if memories are being stored correctly.""",
                     "topic": e.topic,
                     "agents": e.agents,
                     "source": e.source,
+                    "ref_id": e.ref_id,
+                    "entry_id": e.entry_id,
                 }
                 for e in entries[:top_k]
             ],
             "total": len(entries),
+        }
+
+    async def _tool_memory_delete(self, args: dict) -> dict:
+        entry_id = args.get("entry_id")
+        ref_id = args.get("ref_id")
+
+        if not entry_id and not ref_id:
+            return {
+                "success": False,
+                "message": "Either entry_id or ref_id must be provided",
+            }
+
+        success = await self.vector_store.delete_entries(
+            self.effective_table_name,
+            entry_ids=[entry_id] if entry_id else None,
+            ref_ids=[ref_id] if ref_id else None,
+        )
+
+        return {
+            "success": success,
+            "message": "Memory entries deleted successfully"
+            if success
+            else "Failed to delete entries",
+            "deleted_by": "entry_id" if entry_id else "ref_id",
+            "id": entry_id or ref_id,
         }
 
     async def _tool_memory_clear(self, args: dict) -> dict:
@@ -577,6 +634,7 @@ Use to check if memories are being stored correctly.""",
             content = json.dumps(stats, ensure_ascii=False)
         elif uri.endswith("/all"):
             entries = await self.vector_store.get_all_entries(self.effective_table_name)
+
             content = json.dumps(
                 {
                     "entries": [e.to_dict() for e in entries],
