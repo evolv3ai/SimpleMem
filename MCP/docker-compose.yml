@@ -1,0 +1,24 @@
+services:
+  simplemem:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?Set a random secret for JWT signing}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?Set a 32-byte key for AES-256 encryption}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-4.1-mini}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-qwen/qwen3-embedding-4b}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-2560}
+    volumes:
+      - simplemem-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      start-period: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  simplemem-data:

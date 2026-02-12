@@ -63,7 +63,7 @@ class Settings:
     llm_provider: str = field(
         default_factory=lambda: os.getenv(
             "LLM_PROVIDER",
-            "litellm",  # Options: "openrouter", "ollama", "litellm"
+            "openrouter",  # Options: "openrouter", "ollama", "litellm"
         )
     )
 
