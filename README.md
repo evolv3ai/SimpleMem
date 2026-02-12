@@ -336,14 +336,15 @@ The system then executes **parallel multi-view retrieval** across semantic, lexi
 
 ### 📝 Notes for First-Time Users
 
-- Ensure you are using **Python 3.10 in your active environment**, not just installed globally.
+- Ensure you are using **Python 3.10+ in your active environment**, not just installed globally.
 - An OpenAI-compatible API key must be configured **before running any memory construction or retrieval**, otherwise initialization may fail.
 - When using non-OpenAI providers (e.g., Qwen or Azure OpenAI), verify both the model name and `OPENAI_BASE_URL` in `config.py`.
 - For large dialogue datasets, enabling parallel processing can significantly reduce memory construction time.
 
 ### 📋 Requirements
 
-- 🐍 Python 3.10
+- 🐍 Python 3.10+
+- 📦 [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - 🔑 OpenAI-compatible API (OpenAI, Qwen, Azure OpenAI, etc.)
 
 ### 🛠️ Setup
@@ -353,13 +354,31 @@ The system then executes **parallel multi-view retrieval** across semantic, lexi
 git clone https://github.com/aiming-lab/SimpleMem.git
 cd SimpleMem
 
-# 📦 Install dependencies
-pip install -r requirements.txt
+# 📦 Install dependencies (using uv — recommended)
+uv sync
+
+# Or with GPU support (PyTorch)
+uv sync --extra gpu
+
+# Or with evaluation metrics (for benchmarking)
+uv sync --extra eval
 
 # ⚙️ Configure API settings
 cp config.py.example config.py
 # Edit config.py with your API key and preferences
 ```
+
+<details>
+<summary><b>Alternative: pip install</b></summary>
+
+```bash
+pip install -r requirements.txt
+
+# With GPU support
+pip install -r requirements.txt -r requirements-gpu.txt
+```
+
+</details>
 
 ### ⚙️ Configuration Example
 
@@ -437,7 +456,7 @@ If you encounter issues while setting up or running SimpleMem for the first time
 - Restart your Python environment after updating the key
 
 ### 2️⃣ Python Version Mismatch
-- SimpleMem requires **Python 3.10**
+- SimpleMem requires **Python 3.10+**
 - Check your version using:
   ```bash
   python --version
