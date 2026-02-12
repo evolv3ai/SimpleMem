@@ -26,7 +26,8 @@ class UserStore:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY,
-                    openrouter_api_key_encrypted TEXT NOT NULL,
+                    openrouter_api_key_encrypted TEXT NOT NULL DEFAULT '',
+                    litellm_api_key_encrypted TEXT NOT NULL DEFAULT '',
                     table_name TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL,
                     last_active TEXT NOT NULL
@@ -36,6 +37,13 @@ class UserStore:
                 CREATE INDEX IF NOT EXISTS idx_users_table_name
                 ON users(table_name)
             """)
+            # Migration: Add litellm_api_key_encrypted column if it doesn't exist
+            try:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN litellm_api_key_encrypted TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
 
     @contextmanager
@@ -53,12 +61,13 @@ class UserStore:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO users (user_id, openrouter_api_key_encrypted, table_name, created_at, last_active)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (user_id, openrouter_api_key_encrypted, litellm_api_key_encrypted, table_name, created_at, last_active)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user.user_id,
                     user.openrouter_api_key_encrypted,
+                    user.litellm_api_key_encrypted,
                     user.table_name,
                     user.created_at.isoformat(),
                     user.last_active.isoformat(),
@@ -78,7 +87,11 @@ class UserStore:
             if row:
                 return User(
                     user_id=row["user_id"],
-                    openrouter_api_key_encrypted=row["openrouter_api_key_encrypted"],
+                    openrouter_api_key_encrypted=row["openrouter_api_key_encrypted"]
+                    or "",
+                    litellm_api_key_encrypted=row["litellm_api_key_encrypted"]
+                    if "litellm_api_key_encrypted" in row.keys()
+                    else "",
                     table_name=row["table_name"],
                     created_at=datetime.fromisoformat(row["created_at"]),
                     last_active=datetime.fromisoformat(row["last_active"]),
@@ -96,7 +109,11 @@ class UserStore:
             if row:
                 return User(
                     user_id=row["user_id"],
-                    openrouter_api_key_encrypted=row["openrouter_api_key_encrypted"],
+                    openrouter_api_key_encrypted=row["openrouter_api_key_encrypted"]
+                    or "",
+                    litellm_api_key_encrypted=row["litellm_api_key_encrypted"]
+                    if "litellm_api_key_encrypted" in row.keys()
+                    else "",
                     table_name=row["table_name"],
                     created_at=datetime.fromisoformat(row["created_at"]),
                     last_active=datetime.fromisoformat(row["last_active"]),
@@ -142,7 +159,11 @@ class UserStore:
             return [
                 User(
                     user_id=row["user_id"],
-                    openrouter_api_key_encrypted=row["openrouter_api_key_encrypted"],
+                    openrouter_api_key_encrypted=row["openrouter_api_key_encrypted"]
+                    or "",
+                    litellm_api_key_encrypted=row["litellm_api_key_encrypted"]
+                    if "litellm_api_key_encrypted" in row.keys()
+                    else "",
                     table_name=row["table_name"],
                     created_at=datetime.fromisoformat(row["created_at"]),
                     last_active=datetime.fromisoformat(row["last_active"]),

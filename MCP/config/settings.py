@@ -34,64 +34,88 @@ class Settings:
     debug: bool = False
 
     # JWT Configuration
-    jwt_secret_key: str = field(default_factory=lambda: os.getenv(
-        "JWT_SECRET_KEY",
-        "simplemem-secret-key-change-in-production"
-    ))
+    jwt_secret_key: str = field(
+        default_factory=lambda: os.getenv(
+            "JWT_SECRET_KEY", "simplemem-secret-key-change-in-production"
+        )
+    )
     jwt_algorithm: str = "HS256"
     jwt_expiration_days: int = 30
 
     # Encryption for API Keys
-    encryption_key: str = field(default_factory=lambda: os.getenv(
-        "ENCRYPTION_KEY",
-        "simplemem-encryption-key-32bytes!"  # Must be 32 bytes for AES-256
-    ))
+    encryption_key: str = field(
+        default_factory=lambda: os.getenv(
+            "ENCRYPTION_KEY",
+            "simplemem-encryption-key-32bytes!",  # Must be 32 bytes for AES-256
+        )
+    )
 
     # Database Paths
-    data_dir: str = field(default_factory=lambda: os.getenv(
-        "DATA_DIR",
-        "./data"
-    ))
-    lancedb_path: str = field(default_factory=lambda: os.getenv(
-        "LANCEDB_PATH",
-        "./data/lancedb"
-    ))
-    user_db_path: str = field(default_factory=lambda: os.getenv(
-        "USER_DB_PATH",
-        "./data/users.db"
-    ))
+    data_dir: str = field(default_factory=lambda: os.getenv("DATA_DIR", "./data"))
+    lancedb_path: str = field(
+        default_factory=lambda: os.getenv("LANCEDB_PATH", "./data/lancedb")
+    )
+    user_db_path: str = field(
+        default_factory=lambda: os.getenv("USER_DB_PATH", "./data/users.db")
+    )
 
     # LLM Provider Configuration
-    llm_provider: str = field(default_factory=lambda: os.getenv(
-        "LLM_PROVIDER",
-        "openrouter"  # Options: "openrouter", "ollama"
-    ))
+    llm_provider: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_PROVIDER",
+            "litellm",  # Options: "openrouter", "ollama", "litellm"
+        )
+    )
 
     # OpenRouter Configuration (used when llm_provider is "openrouter")
-    openrouter_base_url: str = field(default_factory=lambda: os.getenv(
-        "OPENROUTER_BASE_URL",
-        "https://openrouter.ai/api/v1"
-    ))
+    openrouter_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+        )
+    )
 
     # Ollama Configuration (used when llm_provider is "ollama")
-    ollama_base_url: str = field(default_factory=lambda: os.getenv(
-        "OLLAMA_BASE_URL",
-        "http://localhost:11434/v1"
-    ))
+    ollama_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "OLLAMA_BASE_URL", "http://localhost:11434/v1"
+        )
+    )
+
+    # LiteLLM Configuration (used when llm_provider is "litellm")
+    litellm_base_url: Optional[str] = field(
+        default_factory=lambda: os.getenv("LITELLM_URL")
+        or os.getenv("LITELLM_BASE_URL")
+    )
+    litellm_llm_model: str = field(
+        default_factory=lambda: os.getenv("LITELLM_MODEL", "open-large")
+    )
+    litellm_embedding_model: str = field(
+        default_factory=lambda: os.getenv(
+            "LITELLM_EMBEDDING_MODEL", "text-embedding-3-small"
+        )
+    )
 
     # Common LLM Configuration
-    llm_model: str = field(default_factory=lambda: os.getenv(
-        "LLM_MODEL",
-        "openai/gpt-4.1-mini" # "qwen3:4b-instruct" Default model name
-    ))
-    embedding_model: str = field(default_factory=lambda: os.getenv(
-        "EMBEDDING_MODEL",
-        "qwen3-embedding:4b"  # Default embedding model
-    ))
-    embedding_dimension: int = field(default_factory=lambda: int(os.getenv(
-        "EMBEDDING_DIMENSION",
-        "2560"  # Default: 2560 for qwen3-embedding:4b, 768 for nomic-embed-text
-    )))
+    llm_model: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_MODEL",
+            "openai/gpt-4.1-mini",  # Default model name for OpenRouter
+        )
+    )
+    embedding_model: str = field(
+        default_factory=lambda: os.getenv(
+            "EMBEDDING_MODEL",
+            "qwen3-embedding:4b",  # Default embedding model for Ollama
+        )
+    )
+    embedding_dimension: int = field(
+        default_factory=lambda: int(
+            os.getenv(
+                "EMBEDDING_DIMENSION",
+                "1536",  # Default: 1536 for OpenAI embeddings
+            )
+        )
+    )
 
     # Memory Building Configuration
     window_size: int = 20

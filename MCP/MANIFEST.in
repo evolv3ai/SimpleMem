@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include requirements.txt
+include config.py.example
+recursive-include frontend *.html *.css *.js
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude tests *
+recursive-exclude examples *
+recursive-exclude reference *
+recursive-exclude data *
+recursive-exclude .venv2 *

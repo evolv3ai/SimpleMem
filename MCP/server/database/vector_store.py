@@ -16,18 +16,22 @@ from ..auth.models import MemoryEntry
 # LanceDB schema for memory entries
 def get_memory_schema(embedding_dimension: int = 2560) -> pa.Schema:
     """Get PyArrow schema for memory entries"""
-    return pa.schema([
-        pa.field("entry_id", pa.string()),
-        pa.field("lossless_restatement", pa.string()),
-        pa.field("keywords", pa.list_(pa.string())),
-        pa.field("timestamp", pa.string()),
-        pa.field("location", pa.string()),
-        pa.field("persons", pa.list_(pa.string())),
-        pa.field("entities", pa.list_(pa.string())),
-        pa.field("topic", pa.string()),
-        pa.field("vector", pa.list_(pa.float32(), embedding_dimension)),
-        pa.field("created_at", pa.string()),
-    ])
+    return pa.schema(
+        [
+            pa.field("entry_id", pa.string()),
+            pa.field("lossless_restatement", pa.string()),
+            pa.field("keywords", pa.list_(pa.string())),
+            pa.field("timestamp", pa.string()),
+            pa.field("persons", pa.list_(pa.string())),
+            pa.field("entities", pa.list_(pa.string())),
+            pa.field("topic", pa.string()),
+            pa.field("agents", pa.list_(pa.string())),
+            pa.field("source", pa.string()),
+            pa.field("ref_id", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), embedding_dimension)),
+            pa.field("created_at", pa.string()),
+        ]
+    )
 
 
 class MultiTenantVectorStore:
@@ -94,18 +98,22 @@ class MultiTenantVectorStore:
         # Build records
         records = []
         for entry, embedding in zip(entries, embeddings):
-            records.append({
-                "entry_id": entry.entry_id,
-                "lossless_restatement": entry.lossless_restatement,
-                "keywords": entry.keywords or [],
-                "timestamp": entry.timestamp or "",
-                "location": entry.location or "",
-                "persons": entry.persons or [],
-                "entities": entry.entities or [],
-                "topic": entry.topic or "",
-                "vector": embedding,
-                "created_at": created_at,
-            })
+            records.append(
+                {
+                    "entry_id": entry.entry_id,
+                    "lossless_restatement": entry.lossless_restatement,
+                    "keywords": entry.keywords or [],
+                    "timestamp": entry.timestamp or "",
+                    "persons": entry.persons or [],
+                    "entities": entry.entities or [],
+                    "topic": entry.topic or "",
+                    "agents": entry.agents or [],
+                    "source": entry.source or "",
+                    "ref_id": entry.ref_id or "",
+                    "vector": embedding,
+                    "created_at": created_at,
+                }
+            )
 
         # Add to table
         table.add(records)
@@ -135,24 +143,30 @@ class MultiTenantVectorStore:
             if table.count_rows() == 0:
                 return []
 
-            results = (
-                table.search(query_embedding)
-                .limit(top_k)
-                .to_pandas()
-            )
+            results = table.search(query_embedding).limit(top_k).to_pandas()
 
             entries = []
             for _, row in results.iterrows():
-                entries.append(MemoryEntry(
-                    entry_id=row["entry_id"],
-                    lossless_restatement=row["lossless_restatement"],
-                    keywords=list(row["keywords"]) if row["keywords"] is not None else [],
-                    timestamp=row["timestamp"] if row["timestamp"] else None,
-                    location=row["location"] if row["location"] else None,
-                    persons=list(row["persons"]) if row["persons"] is not None else [],
-                    entities=list(row["entities"]) if row["entities"] is not None else [],
-                    topic=row["topic"] if row["topic"] else None,
-                ))
+                entries.append(
+                    MemoryEntry(
+                        entry_id=row["entry_id"],
+                        lossless_restatement=row["lossless_restatement"],
+                        keywords=list(row["keywords"])
+                        if row["keywords"] is not None
+                        else [],
+                        timestamp=row["timestamp"] if row["timestamp"] else None,
+                        persons=list(row["persons"])
+                        if row["persons"] is not None
+                        else [],
+                        entities=list(row["entities"])
+                        if row["entities"] is not None
+                        else [],
+                        topic=row["topic"] if row["topic"] else None,
+                        agents=list(row["agents"]) if row["agents"] is not None else [],
+                        source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
+                    )
+                )
 
             return entries
 
@@ -190,7 +204,10 @@ class MultiTenantVectorStore:
             scores = []
             for idx, row in df.iterrows():
                 score = 0
-                entry_keywords = set(k.lower() for k in (row["keywords"] or []))
+                entry_keywords = set(
+                    k.lower()
+                    for k in (row["keywords"] if row["keywords"] is not None else [])
+                )
                 entry_text = row["lossless_restatement"].lower()
 
                 for kw in keywords:
@@ -211,16 +228,26 @@ class MultiTenantVectorStore:
             entries = []
             for idx in top_indices:
                 row = df.iloc[idx]
-                entries.append(MemoryEntry(
-                    entry_id=row["entry_id"],
-                    lossless_restatement=row["lossless_restatement"],
-                    keywords=list(row["keywords"]) if row["keywords"] is not None else [],
-                    timestamp=row["timestamp"] if row["timestamp"] else None,
-                    location=row["location"] if row["location"] else None,
-                    persons=list(row["persons"]) if row["persons"] is not None else [],
-                    entities=list(row["entities"]) if row["entities"] is not None else [],
-                    topic=row["topic"] if row["topic"] else None,
-                ))
+                entries.append(
+                    MemoryEntry(
+                        entry_id=row["entry_id"],
+                        lossless_restatement=row["lossless_restatement"],
+                        keywords=list(row["keywords"])
+                        if row["keywords"] is not None
+                        else [],
+                        timestamp=row["timestamp"] if row["timestamp"] else None,
+                        persons=list(row["persons"])
+                        if row["persons"] is not None
+                        else [],
+                        entities=list(row["entities"])
+                        if row["entities"] is not None
+                        else [],
+                        topic=row["topic"] if row["topic"] else None,
+                        agents=list(row["agents"]) if row["agents"] is not None else [],
+                        source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
+                    )
+                )
 
             return entries
 
@@ -232,10 +259,10 @@ class MultiTenantVectorStore:
         self,
         table_name: str,
         persons: Optional[List[str]] = None,
-        location: Optional[str] = None,
         entities: Optional[List[str]] = None,
         timestamp_start: Optional[str] = None,
         timestamp_end: Optional[str] = None,
+        agents: Optional[List[str]] = None,
         top_k: int = 5,
     ) -> List[MemoryEntry]:
         """
@@ -244,10 +271,10 @@ class MultiTenantVectorStore:
         Args:
             table_name: User's table name
             persons: Filter by person names
-            location: Filter by location
             entities: Filter by entities
             timestamp_start: Start of timestamp range
             timestamp_end: End of timestamp range
+            agents: Filter by agent identifiers
             top_k: Number of results to return
 
         Returns:
@@ -271,15 +298,6 @@ class MultiTenantVectorStore:
                     if not persons_lower.intersection(row_persons):
                         mask[i] = False
 
-            if location:
-                location_lower = location.lower()
-                for i, row in df.iterrows():
-                    if mask[i] and row["location"]:
-                        if location_lower not in row["location"].lower():
-                            mask[i] = False
-                    elif mask[i]:
-                        mask[i] = False
-
             if entities:
                 entities_lower = set(e.lower() for e in entities)
                 for i, row in df.iterrows():
@@ -300,21 +318,39 @@ class MultiTenantVectorStore:
                         if row["timestamp"] > timestamp_end:
                             mask[i] = False
 
+            if agents:
+                agents_lower = set(a.lower() for a in agents)
+                for i, row in df.iterrows():
+                    if mask[i]:
+                        row_agents = set(a.lower() for a in (row["agents"] or []))
+                        if not agents_lower.intersection(row_agents):
+                            mask[i] = False
+
             # Get filtered results
             filtered_df = df[[m for m in mask]][:top_k]
 
             entries = []
             for _, row in filtered_df.iterrows():
-                entries.append(MemoryEntry(
-                    entry_id=row["entry_id"],
-                    lossless_restatement=row["lossless_restatement"],
-                    keywords=list(row["keywords"]) if row["keywords"] is not None else [],
-                    timestamp=row["timestamp"] if row["timestamp"] else None,
-                    location=row["location"] if row["location"] else None,
-                    persons=list(row["persons"]) if row["persons"] is not None else [],
-                    entities=list(row["entities"]) if row["entities"] is not None else [],
-                    topic=row["topic"] if row["topic"] else None,
-                ))
+                entries.append(
+                    MemoryEntry(
+                        entry_id=row["entry_id"],
+                        lossless_restatement=row["lossless_restatement"],
+                        keywords=list(row["keywords"])
+                        if row["keywords"] is not None
+                        else [],
+                        timestamp=row["timestamp"] if row["timestamp"] else None,
+                        persons=list(row["persons"])
+                        if row["persons"] is not None
+                        else [],
+                        entities=list(row["entities"])
+                        if row["entities"] is not None
+                        else [],
+                        topic=row["topic"] if row["topic"] else None,
+                        agents=list(row["agents"]) if row["agents"] is not None else [],
+                        source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
+                    )
+                )
 
             return entries
 
@@ -334,16 +370,26 @@ class MultiTenantVectorStore:
             entries = []
 
             for _, row in df.iterrows():
-                entries.append(MemoryEntry(
-                    entry_id=row["entry_id"],
-                    lossless_restatement=row["lossless_restatement"],
-                    keywords=list(row["keywords"]) if row["keywords"] is not None else [],
-                    timestamp=row["timestamp"] if row["timestamp"] else None,
-                    location=row["location"] if row["location"] else None,
-                    persons=list(row["persons"]) if row["persons"] is not None else [],
-                    entities=list(row["entities"]) if row["entities"] is not None else [],
-                    topic=row["topic"] if row["topic"] else None,
-                ))
+                entries.append(
+                    MemoryEntry(
+                        entry_id=row["entry_id"],
+                        lossless_restatement=row["lossless_restatement"],
+                        keywords=list(row["keywords"])
+                        if row["keywords"] is not None
+                        else [],
+                        timestamp=row["timestamp"] if row["timestamp"] else None,
+                        persons=list(row["persons"])
+                        if row["persons"] is not None
+                        else [],
+                        entities=list(row["entities"])
+                        if row["entities"] is not None
+                        else [],
+                        topic=row["topic"] if row["topic"] else None,
+                        agents=list(row["agents"]) if row["agents"] is not None else [],
+                        source=row["source"] if row["source"] else None,
+                        ref_id=row["ref_id"] if row["ref_id"] else None,
+                    )
+                )
 
             return entries
 
@@ -389,6 +435,43 @@ class MultiTenantVectorStore:
 
         except Exception as e:
             print(f"Delete table error: {e}")
+            return False
+
+    def _escape_string(self, s: str) -> str:
+        """Escape single quotes for SQL/filter strings"""
+        return s.replace("'", "''")
+
+    async def delete_entries(
+        self,
+        table_name: str,
+        entry_ids: Optional[List[str]] = None,
+        ref_ids: Optional[List[str]] = None,
+    ) -> bool:
+        """
+        Delete entries by entry_id or ref_id.
+        Deleting by ref_id removes ALL entries with that ref_id.
+        """
+        try:
+            table = self._get_table(table_name)
+
+            if entry_ids:
+                # Delete by entry_id
+                entry_ids_str = ", ".join(
+                    [f"'{self._escape_string(eid)}'" for eid in entry_ids]
+                )
+                table.delete(f"entry_id IN ({entry_ids_str})")
+
+            if ref_ids:
+                # Delete by ref_id (removes all matches)
+                ref_ids_str = ", ".join(
+                    [f"'{self._escape_string(rid)}'" for rid in ref_ids]
+                )
+                table.delete(f"ref_id IN ({ref_ids_str})")
+
+            return True
+
+        except Exception as e:
+            print(f"Delete entries error: {e}")
             return False
 
     def get_stats(self, table_name: str) -> Dict[str, Any]:

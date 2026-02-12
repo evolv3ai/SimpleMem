@@ -1,3 +1,12 @@
-"""SimpleMem MCP Server - Multi-tenant Memory Service for LLM Agents"""
+"""
+SimpleMem MCP Server Package
 
-__version__ = "1.0.0"
+A multi-tenant memory service for LLM agents via the MCP (Model Context Protocol).
+
+This package can be used standalone or mounted in an existing FastAPI application.
+"""
+
+from .app_factory import create_app
+
+__version__ = "1.0.3"
+__all__ = ["create_app"]

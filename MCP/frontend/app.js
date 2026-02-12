@@ -208,6 +208,77 @@ function copyConfig() {
     }
 }
 
+// Memory Management
+async function handleDelete() {
+    const idInput = document.getElementById('delete-id');
+    const typeSelect = document.getElementById('delete-type');
+    const statusMsg = document.getElementById('delete-status');
+    const btn = document.getElementById('delete-btn');
+
+    const id = idInput.value.trim();
+    const type = typeSelect.value;
+
+    if (!id) {
+        statusMsg.textContent = 'Please enter an ID';
+        statusMsg.className = 'status-msg error';
+        return;
+    }
+
+    if (!currentToken) {
+        statusMsg.textContent = 'Session expired. Please register again.';
+        statusMsg.className = 'status-msg error';
+        return;
+    }
+
+    // Disable button
+    btn.disabled = true;
+    btn.textContent = 'Deleting...';
+    statusMsg.textContent = '';
+
+    try {
+        // Construct MCP tool call
+        const payload = {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+                name: "memory_delete",
+                arguments: {
+                    [type]: id
+                }
+            },
+            id: Date.now()
+        };
+
+        const response = await fetch(`${API_BASE}/mcp`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (data.result && data.result.success) {
+            statusMsg.textContent = 'Memory deleted successfully!';
+            statusMsg.className = 'status-msg success';
+            idInput.value = '';
+        } else {
+            const error = data.error?.message || data.result?.message || 'Deletion failed';
+            statusMsg.textContent = `Error: ${error}`;
+            statusMsg.className = 'status-msg error';
+        }
+    } catch (err) {
+        console.error('Delete error:', err);
+        statusMsg.textContent = 'Network error during deletion';
+        statusMsg.className = 'status-msg error';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Delete Memory';
+    }
+}
+
 // Check for existing token in URL
 function checkUrlToken() {
     const params = new URLSearchParams(window.location.search);

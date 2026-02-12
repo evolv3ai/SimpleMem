@@ -23,6 +23,7 @@ LLMClient = object  # Duck-typed: can be OpenRouterClient or OllamaClient
 @dataclass
 class RetrievalPlan:
     """Query analysis and retrieval plan"""
+
     question_type: str
     key_entities: List[str]
     required_info: List[Dict[str, Any]]
@@ -48,8 +49,12 @@ class Retriever:
         enable_reflection: bool = True,
         max_reflection_rounds: int = 2,
         temperature: float = 0.1,
+        embedding_client: Optional[LLMClient] = None,
     ):
         self.client = llm_client
+        self.embedding_client = (
+            embedding_client or llm_client
+        )  # Use embedding client if provided, otherwise use LLM client
         self.vector_store = vector_store
         self.table_name = table_name
         self.semantic_top_k = semantic_top_k
@@ -62,6 +67,7 @@ class Retriever:
     async def retrieve(
         self,
         query: str,
+        agents: Optional[List[str]] = None,
         enable_reflection: Optional[bool] = None,
     ) -> List[MemoryEntry]:
         """
@@ -69,6 +75,7 @@ class Retriever:
 
         Args:
             query: User's question
+            agents: Optional list of agent identifiers to filter by
             enable_reflection: Override reflection setting
 
         Returns:
@@ -81,22 +88,41 @@ class Retriever:
         )
 
         if self.enable_planning:
-            return await self._retrieve_with_planning(query, use_reflection)
+            return await self._retrieve_with_planning(query, agents, use_reflection)
         else:
-            return await self._simple_retrieve(query)
+            return await self._simple_retrieve(query, agents)
 
-    async def _simple_retrieve(self, query: str) -> List[MemoryEntry]:
+    def _filter_by_agents(
+        self, entries: List[MemoryEntry], agents: List[str]
+    ) -> List[MemoryEntry]:
+        """Filter memory entries by agent identifiers (case-insensitive)"""
+        agents_lower = {agent.lower() for agent in agents}
+        return [
+            entry
+            for entry in entries
+            if agents_lower.intersection({a.lower() for a in entry.agents})
+        ]
+
+    async def _simple_retrieve(
+        self, query: str, agents: Optional[List[str]] = None
+    ) -> List[MemoryEntry]:
         """Simple semantic search without planning"""
-        query_embedding = await self.client.create_single_embedding(query)
-        return await self.vector_store.semantic_search(
+        query_embedding = await self.embedding_client.create_single_embedding(query)
+        semantic_results = await self.vector_store.semantic_search(
             self.table_name,
             query_embedding,
             top_k=self.semantic_top_k,
         )
 
+        # Filter by agents if specified
+        if agents:
+            return self._filter_by_agents(semantic_results, agents)
+        return semantic_results
+
     async def _retrieve_with_planning(
         self,
         query: str,
+        agents: Optional[List[str]],
         enable_reflection: bool,
     ) -> List[MemoryEntry]:
         """Retrieve with intelligent planning and optional reflection"""
@@ -108,7 +134,7 @@ class Retriever:
         search_queries = await self._generate_targeted_queries(query, plan)
 
         # Step 3: Execute searches sequentially
-        all_results = await self._execute_searches(search_queries)
+        all_results = await self._execute_searches(search_queries, agents)
 
         # Step 4: Merge and deduplicate
         merged_results = self._merge_and_deduplicate(all_results)
@@ -119,6 +145,7 @@ class Retriever:
                 query,
                 merged_results,
                 plan,
+                agents,
             )
 
         return merged_results
@@ -173,8 +200,12 @@ Return ONLY valid JSON."""
                     key_entities=data.get("key_entities", []),
                     required_info=data.get("required_info", []),
                     relationships=data.get("relationships", []),
-                    minimal_queries_needed=min(data.get("minimal_queries_needed", 1), 4),
-                    complexity_score=min(max(data.get("complexity_score", 0.5), 0.0), 1.0),
+                    minimal_queries_needed=min(
+                        data.get("minimal_queries_needed", 1), 4
+                    ),
+                    complexity_score=min(
+                        max(data.get("complexity_score", 0.5), 0.0), 1.0
+                    ),
                 )
         except Exception as e:
             print(f"Query analysis error: {e}")
@@ -246,18 +277,22 @@ Return ONLY valid JSON."""
     async def _execute_searches(
         self,
         queries: List[str],
+        agents: Optional[List[str]] = None,
     ) -> List[List[MemoryEntry]]:
         """Execute searches sequentially"""
         all_results = []
 
         for query in queries:
             # Semantic search
-            query_embedding = await self.client.create_single_embedding(query)
+            query_embedding = await self.embedding_client.create_single_embedding(query)
             semantic_results = await self.vector_store.semantic_search(
                 self.table_name,
                 query_embedding,
                 top_k=self.semantic_top_k,
             )
+            # Filter by agents if specified
+            if agents:
+                semantic_results = self._filter_by_agents(semantic_results, agents)
             all_results.append(semantic_results)
 
             # Keyword search
@@ -268,6 +303,9 @@ Return ONLY valid JSON."""
                     keywords,
                     top_k=self.keyword_top_k,
                 )
+                # Filter by agents if specified
+                if agents:
+                    keyword_results = self._filter_by_agents(keyword_results, agents)
                 all_results.append(keyword_results)
 
         return all_results
@@ -276,28 +314,134 @@ Return ONLY valid JSON."""
         """Extract keywords from query for lexical search"""
         # Simple keyword extraction
         stop_words = {
-            "a", "an", "the", "is", "are", "was", "were", "be", "been",
-            "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "could", "should", "may", "might", "must", "shall",
-            "can", "need", "dare", "ought", "used", "to", "of", "in",
-            "for", "on", "with", "at", "by", "from", "as", "into",
-            "through", "during", "before", "after", "above", "below",
-            "between", "under", "again", "further", "then", "once",
-            "here", "there", "when", "where", "why", "how", "all",
-            "each", "few", "more", "most", "other", "some", "such",
-            "no", "nor", "not", "only", "own", "same", "so", "than",
-            "too", "very", "just", "and", "but", "if", "or", "because",
-            "until", "while", "what", "which", "who", "whom", "this",
-            "that", "these", "those", "am", "i", "me", "my", "myself",
-            "we", "our", "ours", "ourselves", "you", "your", "yours",
-            "yourself", "yourselves", "he", "him", "his", "himself",
-            "she", "her", "hers", "herself", "it", "its", "itself",
-            "they", "them", "their", "theirs", "themselves",
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "shall",
+            "can",
+            "need",
+            "dare",
+            "ought",
+            "used",
+            "to",
+            "of",
+            "in",
+            "for",
+            "on",
+            "with",
+            "at",
+            "by",
+            "from",
+            "as",
+            "into",
+            "through",
+            "during",
+            "before",
+            "after",
+            "above",
+            "below",
+            "between",
+            "under",
+            "again",
+            "further",
+            "then",
+            "once",
+            "here",
+            "there",
+            "when",
+            "where",
+            "why",
+            "how",
+            "all",
+            "each",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "no",
+            "nor",
+            "not",
+            "only",
+            "own",
+            "same",
+            "so",
+            "than",
+            "too",
+            "very",
+            "just",
+            "and",
+            "but",
+            "if",
+            "or",
+            "because",
+            "until",
+            "while",
+            "what",
+            "which",
+            "who",
+            "whom",
+            "this",
+            "that",
+            "these",
+            "those",
+            "am",
+            "i",
+            "me",
+            "my",
+            "myself",
+            "we",
+            "our",
+            "ours",
+            "ourselves",
+            "you",
+            "your",
+            "yours",
+            "yourself",
+            "yourselves",
+            "he",
+            "him",
+            "his",
+            "himself",
+            "she",
+            "her",
+            "hers",
+            "herself",
+            "it",
+            "its",
+            "itself",
+            "they",
+            "them",
+            "their",
+            "theirs",
+            "themselves",
         }
 
         words = query.lower().split()
         keywords = [
-            word.strip(".,!?;:'\"()[]{}") for word in words
+            word.strip(".,!?;:'\"()[]{}")
+            for word in words
             if word.lower() not in stop_words and len(word) > 2
         ]
 
@@ -324,6 +468,7 @@ Return ONLY valid JSON."""
         query: str,
         initial_results: List[MemoryEntry],
         plan: RetrievalPlan,
+        agents: Optional[List[str]] = None,
     ) -> List[MemoryEntry]:
         """Iterative refinement through reflection"""
 
@@ -350,7 +495,9 @@ Return ONLY valid JSON."""
                 break
 
             # Execute additional searches
-            additional_results = await self._execute_searches(additional_queries)
+            additional_results = await self._execute_searches(
+                additional_queries, agents
+            )
 
             # Merge with existing results
             all_results = [current_results] + additional_results
@@ -370,10 +517,12 @@ Return ONLY valid JSON."""
             return False, ["No results found"]
 
         # Format results for analysis
-        results_text = "\n".join([
-            f"- {entry.lossless_restatement}"
-            for entry in results[:20]  # Limit for prompt size
-        ])
+        results_text = "\n".join(
+            [
+                f"- {entry.lossless_restatement}"
+                for entry in results[:20]  # Limit for prompt size
+            ]
+        )
 
         prompt = f"""Analyze if the retrieved information is sufficient to answer the question.
 
@@ -398,7 +547,10 @@ Return JSON:
 Return ONLY valid JSON."""
 
         messages = [
-            {"role": "system", "content": "You are an information completeness analyst."},
+            {
+                "role": "system",
+                "content": "You are an information completeness analyst.",
+            },
             {"role": "user", "content": prompt},
         ]
 
@@ -468,7 +620,6 @@ Return ONLY valid JSON."""
         self,
         query: str,
         persons: Optional[List[str]] = None,
-        location: Optional[str] = None,
         entities: Optional[List[str]] = None,
         timestamp_start: Optional[str] = None,
         timestamp_end: Optional[str] = None,
@@ -479,7 +630,6 @@ Return ONLY valid JSON."""
         Args:
             query: Search query
             persons: Filter by person names
-            location: Filter by location
             entities: Filter by entities
             timestamp_start: Start of timestamp range
             timestamp_end: End of timestamp range
@@ -490,7 +640,7 @@ Return ONLY valid JSON."""
         all_results = []
 
         # Semantic search
-        query_embedding = await self.client.create_single_embedding(query)
+        query_embedding = await self.embedding_client.create_single_embedding(query)
         semantic_results = await self.vector_store.semantic_search(
             self.table_name,
             query_embedding,
@@ -509,11 +659,10 @@ Return ONLY valid JSON."""
             all_results.append(keyword_results)
 
         # Structured search (if filters provided)
-        if any([persons, location, entities, timestamp_start, timestamp_end]):
+        if any([persons, entities, timestamp_start, timestamp_end]):
             structured_results = await self.vector_store.structured_search(
                 self.table_name,
                 persons=persons,
-                location=location,
                 entities=entities,
                 timestamp_start=timestamp_start,
                 timestamp_end=timestamp_end,

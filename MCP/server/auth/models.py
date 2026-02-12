@@ -14,6 +14,8 @@ class User:
 
     user_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     openrouter_api_key_encrypted: str = ""
+    litellm_api_key_encrypted: str = ""
+    embedding_api_key_encrypted: str = ""
     table_name: str = ""
     created_at: datetime = field(default_factory=datetime.utcnow)
     last_active: datetime = field(default_factory=datetime.utcnow)
@@ -28,6 +30,8 @@ class User:
         return {
             "user_id": self.user_id,
             "openrouter_api_key_encrypted": self.openrouter_api_key_encrypted,
+            "litellm_api_key_encrypted": self.litellm_api_key_encrypted,
+            "embedding_api_key_encrypted": self.embedding_api_key_encrypted,
             "table_name": self.table_name,
             "created_at": self.created_at.isoformat(),
             "last_active": self.last_active.isoformat(),
@@ -37,7 +41,9 @@ class User:
     def from_dict(cls, data: dict) -> "User":
         return cls(
             user_id=data["user_id"],
-            openrouter_api_key_encrypted=data["openrouter_api_key_encrypted"],
+            openrouter_api_key_encrypted=data.get("openrouter_api_key_encrypted", ""),
+            litellm_api_key_encrypted=data.get("litellm_api_key_encrypted", ""),
+            embedding_api_key_encrypted=data.get("embedding_api_key_encrypted", ""),
             table_name=data["table_name"],
             created_at=datetime.fromisoformat(data["created_at"]),
             last_active=datetime.fromisoformat(data["last_active"]),
@@ -79,10 +85,12 @@ class MemoryEntry:
     lossless_restatement: str = ""
     keywords: list = field(default_factory=list)
     timestamp: Optional[str] = None
-    location: Optional[str] = None
     persons: list = field(default_factory=list)
     entities: list = field(default_factory=list)
     topic: Optional[str] = None
+    agents: list = field(default_factory=list)
+    source: Optional[str] = None
+    ref_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -90,10 +98,12 @@ class MemoryEntry:
             "lossless_restatement": self.lossless_restatement,
             "keywords": self.keywords,
             "timestamp": self.timestamp,
-            "location": self.location,
             "persons": self.persons,
             "entities": self.entities,
             "topic": self.topic,
+            "agents": self.agents,
+            "source": self.source,
+            "ref_id": self.ref_id,
         }
 
     @classmethod
@@ -103,10 +113,12 @@ class MemoryEntry:
             lossless_restatement=data.get("lossless_restatement", ""),
             keywords=data.get("keywords", []),
             timestamp=data.get("timestamp"),
-            location=data.get("location"),
             persons=data.get("persons", []),
             entities=data.get("entities", []),
             topic=data.get("topic"),
+            agents=data.get("agents", []),
+            source=data.get("source"),
+            ref_id=data.get("ref_id"),
         )
 
 

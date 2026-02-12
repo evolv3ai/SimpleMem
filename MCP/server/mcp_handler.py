@@ -5,18 +5,19 @@ Implements the Model Context Protocol for remote clients like Claude Desktop.
 """
 
 import json
-import asyncio
-from typing import Any, Optional, AsyncGenerator
-from dataclasses import dataclass, asdict
+from typing import Any, Optional, List
+from dataclasses import dataclass
 
-from .auth.models import User, MemoryEntry
+from .auth.models import User
 from .database.vector_store import MultiTenantVectorStore
 from .core.memory_builder import MemoryBuilder
 from .core.retriever import Retriever
 from .core.answer_generator import AnswerGenerator
 
 # Type alias for client manager (supports both OpenRouter and Ollama)
-ClientManager = object  # Duck-typed: can be OpenRouterClientManager or OllamaClientManager
+ClientManager = (
+    object  # Duck-typed: can be OpenRouterClientManager or OllamaClientManager
+)
 
 
 @dataclass
@@ -57,17 +58,26 @@ class MCPHandler:
     def __init__(
         self,
         user: User,
-        api_key: str,
+        llm_api_key: str,
+        embedding_api_key: str,
         vector_store: MultiTenantVectorStore,
         client_manager: ClientManager,
         settings: Any,
+        custom_table_suffix: Optional[str] = None,
     ):
         self.user = user
-        self.api_key = api_key
+        self.llm_api_key = llm_api_key
+        self.embedding_api_key = embedding_api_key
         self.vector_store = vector_store
         self.client_manager = client_manager
         self.settings = settings
         self.initialized = False
+
+        # Generate effective table name based on custom suffix
+        if custom_table_suffix:
+            self.effective_table_name = f"{user.table_name}_{custom_table_suffix}"
+        else:
+            self.effective_table_name = user.table_name
 
         # Lazy-loaded components
         self._memory_builder: Optional[MemoryBuilder] = None
@@ -75,17 +85,30 @@ class MCPHandler:
         self._answer_generator: Optional[AnswerGenerator] = None
 
     def _get_client(self):
-        return self.client_manager.get_client(self.api_key)
+        return self.client_manager.get_client(self.llm_api_key)
+
+    def _get_embedding_client(self):
+        # Use dedicated embedding client if manager supports it
+        if hasattr(self.client_manager, "get_embedding_client"):
+            # Use specific embedding key if configured
+            return self.client_manager.get_embedding_client(self.embedding_api_key)
+
+        # Fallback to standard client (which implies shared key/client)
+        # However, our http_server logic ensures embedding_api_key has a value (either distinct or same as llm)
+        # So logically we should try to use it if the manager supports it.
+        # But if manager doesn't support get_embedding_client, we must fallback to _get_client()
+        return self._get_client()
 
     def _get_memory_builder(self) -> MemoryBuilder:
         if not self._memory_builder:
             self._memory_builder = MemoryBuilder(
                 llm_client=self._get_client(),
                 vector_store=self.vector_store,
-                table_name=self.user.table_name,
+                table_name=self.effective_table_name,
                 window_size=self.settings.window_size,
                 overlap_size=self.settings.overlap_size,
                 temperature=self.settings.llm_temperature,
+                embedding_client=self._get_embedding_client(),
             )
         return self._memory_builder
 
@@ -94,13 +117,14 @@ class MCPHandler:
             self._retriever = Retriever(
                 llm_client=self._get_client(),
                 vector_store=self.vector_store,
-                table_name=self.user.table_name,
+                table_name=self.effective_table_name,
                 semantic_top_k=self.settings.semantic_top_k,
                 keyword_top_k=self.settings.keyword_top_k,
                 enable_planning=self.settings.enable_planning,
                 enable_reflection=self.settings.enable_reflection,
                 max_reflection_rounds=self.settings.max_reflection_rounds,
                 temperature=self.settings.llm_temperature,
+                embedding_client=self._get_embedding_client(),
             )
         return self._retriever
 
@@ -125,13 +149,17 @@ class MCPHandler:
             response = await self._dispatch(request)
             return json.dumps(response.to_dict(), ensure_ascii=False)
         except json.JSONDecodeError as e:
-            return json.dumps(JsonRpcResponse(
-                error={"code": -32700, "message": f"Parse error: {e}"}
-            ).to_dict())
+            return json.dumps(
+                JsonRpcResponse(
+                    error={"code": -32700, "message": f"Parse error: {e}"}
+                ).to_dict()
+            )
         except Exception as e:
-            return json.dumps(JsonRpcResponse(
-                error={"code": -32603, "message": f"Internal error: {e}"}
-            ).to_dict())
+            return json.dumps(
+                JsonRpcResponse(
+                    error={"code": -32603, "message": f"Internal error: {e}"}
+                ).to_dict()
+            )
 
     async def _dispatch(self, request: JsonRpcRequest) -> JsonRpcResponse:
         """Dispatch request to appropriate handler"""
@@ -152,7 +180,7 @@ class MCPHandler:
         if not handler:
             return JsonRpcResponse(
                 id=request.id,
-                error={"code": -32601, "message": f"Method not found: {method}"}
+                error={"code": -32601, "message": f"Method not found: {method}"},
             )
 
         try:
@@ -160,8 +188,7 @@ class MCPHandler:
             return JsonRpcResponse(id=request.id, result=result)
         except Exception as e:
             return JsonRpcResponse(
-                id=request.id,
-                error={"code": -32603, "message": str(e)}
+                id=request.id, error={"code": -32603, "message": str(e)}
             )
 
     async def _handle_initialize(self, params: dict) -> dict:
@@ -177,9 +204,9 @@ class MCPHandler:
                 "name": SERVER_NAME,
                 "version": SERVER_VERSION,
                 "description": "SimpleMem - Advanced Lifelong Memory System for LLM Agents. "
-                              "Features: Semantic lossless compression, coreference resolution, "
-                              "temporal anchoring, hybrid retrieval (semantic + lexical + symbolic), "
-                              "and intelligent query planning with reflection.",
+                "Features: Semantic lossless compression, coreference resolution, "
+                "temporal anchoring, hybrid retrieval (semantic + lexical + symbolic), "
+                "and intelligent query planning with reflection.",
             },
             "instructions": """SimpleMem is your long-term memory system. Use it to:
 
@@ -240,8 +267,20 @@ Example: memory_add(speaker="Alice", content="I'll meet Bob at Starbucks tomorro
                                 "type": "string",
                                 "description": "ISO 8601 timestamp of when this was said (used for temporal anchoring). Defaults to now.",
                             },
+                            "agents": {
+                                "type": "string",
+                                "description": "Comma-separated list of agent identifiers to tag this memory with (e.g., 'TXN_AGENT,REFUND_AGENT'). Used for agent-specific memory filtering.",
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": "Optional source of the information (e.g., 'API', 'User Input', 'Database')",
+                            },
+                            "ref_id": {
+                                "type": "string",
+                                "description": "Optional reference ID for the memory entry (not passed to LLMs)",
+                            },
                         },
-                        "required": ["speaker", "content"],
+                        "required": ["content"],
                     },
                 },
                 {
@@ -263,11 +302,32 @@ All dialogues are processed immediately and stored. No manual flush needed.""",
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "speaker": {"type": "string", "description": "Speaker name"},
-                                        "content": {"type": "string", "description": "Dialogue content"},
-                                        "timestamp": {"type": "string", "description": "ISO 8601 timestamp"},
+                                        "speaker": {
+                                            "type": "string",
+                                            "description": "Speaker name",
+                                        },
+                                        "content": {
+                                            "type": "string",
+                                            "description": "Dialogue content",
+                                        },
+                                        "timestamp": {
+                                            "type": "string",
+                                            "description": "ISO 8601 timestamp",
+                                        },
+                                        "agents": {
+                                            "type": "string",
+                                            "description": "Comma-separated list of agent identifiers",
+                                        },
+                                        "source": {
+                                            "type": "string",
+                                            "description": "Optional source of the information",
+                                        },
+                                        "ref_id": {
+                                            "type": "string",
+                                            "description": "Optional reference ID",
+                                        },
                                     },
-                                    "required": ["speaker", "content"],
+                                    "required": ["content"],
                                 },
                             },
                         },
@@ -299,6 +359,10 @@ Returns: answer, reasoning, confidence level, and number of memory entries used.
                                 "type": "boolean",
                                 "description": "Enable iterative refinement for complex multi-hop queries. Default: true. Disable for simple factual lookups to save tokens.",
                             },
+                            "agents": {
+                                "type": "string",
+                                "description": "Filter memories by agent(s). Comma-separated list (e.g., 'TXN_AGENT,REFUND_AGENT') or leave empty for all agents.",
+                            },
                         },
                         "required": ["question"],
                     },
@@ -312,7 +376,7 @@ Returns raw memory entries with full metadata. Use this when you need:
 - To process/analyze memories yourself
 - To show the user what's stored about a topic
 
-Each entry contains: content (self-contained fact), timestamp, location, persons, entities, topic.""",
+Each entry contains: content (self-contained fact), timestamp, persons, entities, topic.""",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -324,8 +388,32 @@ Each entry contains: content (self-contained fact), timestamp, location, persons
                                 "type": "integer",
                                 "description": "Maximum number of entries to return. Default: 10",
                             },
+                            "agents": {
+                                "type": "string",
+                                "description": "Filter memories by agent(s). Comma-separated list (e.g., 'TXN_AGENT') or leave empty for all agents.",
+                            },
                         },
                         "required": ["query"],
+                    },
+                },
+                {
+                    "name": "memory_delete",
+                    "description": """Delete memory entries by entry_id or ref_id.
+                    
+                    Provide either 'entry_id' to delete a specific memory, or 'ref_id' to delete all memories associated with that reference ID.
+                    At least one identifier must be provided.""",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "entry_id": {
+                                "type": "string",
+                                "description": "ID of the specific memory entry to delete",
+                            },
+                            "ref_id": {
+                                "type": "string",
+                                "description": "Reference ID to delete (removes ALL matching entries)",
+                            },
+                        },
                     },
                 },
                 {
@@ -365,6 +453,7 @@ Use to check if memories are being stored correctly.""",
             "memory_add_batch": self._tool_memory_add_batch,
             "memory_query": self._tool_memory_query,
             "memory_retrieve": self._tool_memory_retrieve,
+            "memory_delete": self._tool_memory_delete,
             "memory_clear": self._tool_memory_clear,
             "memory_stats": self._tool_memory_stats,
         }
@@ -386,9 +475,12 @@ Use to check if memories are being stored correctly.""",
     async def _tool_memory_add(self, args: dict) -> dict:
         builder = self._get_memory_builder()
         return await builder.add_dialogue(
-            speaker=args["speaker"],
+            speaker=args.get("speaker", "System"),
             content=args["content"],
             timestamp=args.get("timestamp"),
+            agents=args.get("agents"),
+            source=args.get("source"),
+            ref_id=args.get("ref_id"),
         )
 
     async def _tool_memory_add_batch(self, args: dict) -> dict:
@@ -401,8 +493,13 @@ Use to check if memories are being stored correctly.""",
         retriever = self._get_retriever()
         generator = self._get_answer_generator()
 
+        # Parse agents string
+        agents_str = args.get("agents")
+        agents_list = self._parse_agents(agents_str) if agents_str else None
+
         contexts = await retriever.retrieve(
             query=args["question"],
+            agents=agents_list,
             enable_reflection=args.get("enable_reflection", True),
         )
 
@@ -411,20 +508,38 @@ Use to check if memories are being stored correctly.""",
             contexts=contexts,
         )
 
+        # Extract sources only from contexts that were actually used
+        used_indices = answer_result.get("used_context_indices", [])
+        sources = []
+        if used_indices:
+            sources = list(
+                set(
+                    contexts[i].source
+                    for i in used_indices
+                    if i < len(contexts) and contexts[i].source is not None
+                )
+            )
+
         return {
             "question": args["question"],
             "answer": answer_result["answer"],
             "reasoning": answer_result["reasoning"],
             "confidence": answer_result["confidence"],
             "contexts_used": len(contexts),
+            "sources": sources,
         }
 
     async def _tool_memory_retrieve(self, args: dict) -> dict:
         retriever = self._get_retriever()
         top_k = args.get("top_k", 10)
 
+        # Parse agents string
+        agents_str = args.get("agents")
+        agents_list = self._parse_agents(agents_str) if agents_str else None
+
         entries = await retriever.retrieve(
             query=args["query"],
+            agents=agents_list,
             enable_reflection=False,
         )
 
@@ -434,31 +549,61 @@ Use to check if memories are being stored correctly.""",
                 {
                     "content": e.lossless_restatement,
                     "timestamp": e.timestamp,
-                    "location": e.location,
                     "persons": e.persons,
                     "entities": e.entities,
                     "topic": e.topic,
+                    "agents": e.agents,
+                    "source": e.source,
+                    "ref_id": e.ref_id,
+                    "entry_id": e.entry_id,
                 }
                 for e in entries[:top_k]
             ],
             "total": len(entries),
         }
 
+    async def _tool_memory_delete(self, args: dict) -> dict:
+        entry_id = args.get("entry_id")
+        ref_id = args.get("ref_id")
+
+        if not entry_id and not ref_id:
+            return {
+                "success": False,
+                "message": "Either entry_id or ref_id must be provided",
+            }
+
+        success = await self.vector_store.delete_entries(
+            self.effective_table_name,
+            entry_ids=[entry_id] if entry_id else None,
+            ref_ids=[ref_id] if ref_id else None,
+        )
+
+        return {
+            "success": success,
+            "message": "Memory entries deleted successfully"
+            if success
+            else "Failed to delete entries",
+            "deleted_by": "entry_id" if entry_id else "ref_id",
+            "id": entry_id or ref_id,
+        }
+
     async def _tool_memory_clear(self, args: dict) -> dict:
-        success = await self.vector_store.clear_table(self.user.table_name)
+        success = await self.vector_store.clear_table(self.effective_table_name)
         return {
             "success": success,
             "message": "All memories cleared" if success else "Failed",
         }
 
     async def _tool_memory_stats(self, args: dict) -> dict:
-        stats = self.vector_store.get_stats(self.user.table_name)
+        stats = self.vector_store.get_stats(self.effective_table_name)
         builder = self._get_memory_builder()
         builder_stats = builder.get_stats()
         return {
             "user_id": self.user.user_id,
             "entry_count": stats.get("entry_count", 0),
-            "total_dialogues_processed": builder_stats.get("total_dialogues_processed", 0),
+            "total_dialogues_processed": builder_stats.get(
+                "total_dialogues_processed", 0
+            ),
         }
 
     async def _handle_resources_list(self, params: dict) -> dict:
@@ -485,14 +630,18 @@ Use to check if memories are being stored correctly.""",
         uri = params.get("uri", "")
 
         if uri.endswith("/stats"):
-            stats = self.vector_store.get_stats(self.user.table_name)
+            stats = self.vector_store.get_stats(self.effective_table_name)
             content = json.dumps(stats, ensure_ascii=False)
         elif uri.endswith("/all"):
-            entries = await self.vector_store.get_all_entries(self.user.table_name)
-            content = json.dumps({
-                "entries": [e.to_dict() for e in entries],
-                "total": len(entries),
-            }, ensure_ascii=False)
+            entries = await self.vector_store.get_all_entries(self.effective_table_name)
+
+            content = json.dumps(
+                {
+                    "entries": [e.to_dict() for e in entries],
+                    "total": len(entries),
+                },
+                ensure_ascii=False,
+            )
         else:
             raise ValueError(f"Unknown resource: {uri}")
 
@@ -505,3 +654,11 @@ Use to check if memories are being stored correctly.""",
                 }
             ]
         }
+
+    def _parse_agents(self, agents: Optional[str]) -> List[str]:
+        """Parse comma-separated agents string into list"""
+        if not agents:
+            return []
+        if isinstance(agents, list):
+            return agents
+        return [a.strip() for a in agents.split(",") if a.strip()]

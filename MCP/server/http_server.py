@@ -17,14 +17,13 @@ Streamable HTTP Transport:
 import asyncio
 import json
 import os
-import uuid
 import secrets
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from fastapi import FastAPI, HTTPException, Depends, Query, Request, Header, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
@@ -36,17 +35,23 @@ from .database.user_store import UserStore
 from .database.vector_store import MultiTenantVectorStore
 from .integrations.openrouter import OpenRouterClient, OpenRouterClientManager
 from .integrations.ollama import OllamaClient, OllamaClientManager
+from .integrations.litellm import LiteLLMClient, LiteLLMClientManager
 from .mcp_handler import MCPHandler
 
 import sys
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.settings import get_settings
 
 
 # === Pydantic Models ===
 
+
 class RegisterRequest(BaseModel):
-    openrouter_api_key: str
+    openrouter_api_key: Optional[str] = None
+    litellm_api_key: Optional[str] = None
+    embedding_api_key: Optional[str] = None
 
 
 class RegisterResponse(BaseModel):
@@ -59,9 +64,11 @@ class RegisterResponse(BaseModel):
 
 # === Session Management ===
 
+
 @dataclass
 class MCPSession:
     """Represents an active MCP session"""
+
     session_id: str
     user_id: str
     user: User
@@ -95,7 +102,9 @@ SESSION_EXPIRY_MINUTES = 30
 
 settings = get_settings()
 user_store = UserStore(settings.user_db_path)
-vector_store = MultiTenantVectorStore(settings.lancedb_path, settings.embedding_dimension)
+vector_store = MultiTenantVectorStore(
+    settings.lancedb_path, settings.embedding_dimension
+)
 token_manager = TokenManager(
     secret_key=settings.jwt_secret_key,
     encryption_key=settings.encryption_key,
@@ -108,6 +117,12 @@ if settings.llm_provider == "ollama":
         base_url=settings.ollama_base_url,
         llm_model=settings.llm_model,
         embedding_model=settings.embedding_model,
+    )
+elif settings.llm_provider == "litellm":
+    client_manager = LiteLLMClientManager(
+        base_url=settings.litellm_base_url,
+        llm_model=settings.litellm_llm_model,
+        embedding_model=settings.litellm_embedding_model,
     )
 else:  # Default to OpenRouter
     client_manager = OpenRouterClientManager(
@@ -128,12 +143,14 @@ _session_lock = asyncio.Lock()
 
 # === Session Helper Functions ===
 
+
 async def cleanup_expired_sessions():
     """Remove expired sessions"""
     async with _session_lock:
         now = datetime.utcnow()
         expired = [
-            sid for sid, session in _sessions.items()
+            sid
+            for sid, session in _sessions.items()
             if (now - session.last_active).total_seconds() > SESSION_EXPIRY_MINUTES * 60
         ]
         for sid in expired:
@@ -154,7 +171,13 @@ def generate_session_id() -> str:
     return secrets.token_urlsafe(32)
 
 
-async def get_or_create_session(user: User, api_key: str, session_id: Optional[str] = None) -> MCPSession:
+async def get_or_create_session(
+    user: User,
+    llm_api_key: str,
+    embedding_api_key: str,
+    session_id: Optional[str] = None,
+    custom_table_suffix: Optional[str] = None,
+) -> MCPSession:
     """Get existing session or create new one"""
     async with _session_lock:
         if session_id and session_id in _sessions:
@@ -166,16 +189,18 @@ async def get_or_create_session(user: User, api_key: str, session_id: Optional[s
         new_session_id = generate_session_id()
         handler = MCPHandler(
             user=user,
-            api_key=api_key,
+            llm_api_key=llm_api_key,
+            embedding_api_key=embedding_api_key,
             vector_store=vector_store,
             client_manager=client_manager,
             settings=settings,
+            custom_table_suffix=custom_table_suffix,
         )
         session = MCPSession(
             session_id=new_session_id,
             user_id=user.user_id,
             user=user,
-            api_key=api_key,
+            api_key=llm_api_key,  # Store primary key
             handler=handler,
         )
         _sessions[new_session_id] = session
@@ -202,10 +227,25 @@ async def delete_session(session_id: str) -> bool:
 
 # === Authentication Helper ===
 
-async def verify_bearer_token(authorization: Optional[str]) -> tuple[User, str]:
+
+def validate_table_suffix(suffix: str) -> bool:
+    """
+    Validate custom table suffix.
+    Must be alphanumeric, underscore, or hyphen, max 64 chars.
+    """
+    if not suffix:
+        return False
+    if len(suffix) > 64:
+        return False
+    import re
+
+    return bool(re.match(r"^[a-zA-Z0-9_-]+$", suffix))
+
+
+async def verify_bearer_token(authorization: Optional[str]) -> tuple[User, str, str]:
     """
     Verify Bearer token from Authorization header.
-    Returns (user, api_key) tuple.
+    Returns (user, llm_api_key, embedding_api_key) tuple.
     Raises HTTPException on failure.
     """
     if not authorization:
@@ -236,20 +276,43 @@ async def verify_bearer_token(authorization: Optional[str]) -> tuple[User, str]:
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
-    return user, api_key
+    # Get the appropriate API key based on what's available
+    # Priority: litellm key (if provider is litellm and key exists) > openrouter key
+    if user.litellm_api_key_encrypted:
+        llm_api_key = token_manager.decrypt_api_key(user.litellm_api_key_encrypted)
+    elif user.openrouter_api_key_encrypted:
+        llm_api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+    else:
+        raise HTTPException(status_code=401, detail="No API key found for user")
+
+    # Use embedding API key if set, otherwise fall back to LLM API key
+    if user.embedding_api_key_encrypted:
+        embedding_api_key = token_manager.decrypt_api_key(
+            user.embedding_api_key_encrypted
+        )
+    else:
+        embedding_api_key = llm_api_key
+
+    return user, llm_api_key, embedding_api_key
 
 
 # === Lifecycle ===
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager for the app"""
     print("SimpleMem MCP Server started")
-    print(f"  - LLM Model: {settings.llm_model}")
-    print(f"  - Embedding Model: {settings.embedding_model}")
+    print(f"  - Provider: {settings.llm_provider}")
+    if settings.llm_provider == "litellm":
+        print(f"  - LLM Model: {settings.litellm_llm_model}")
+        print(f"  - Embedding Model: {settings.litellm_embedding_model}")
+        print(f"  - Base URL: {settings.litellm_base_url}")
+    else:
+        print(f"  - LLM Model: {settings.llm_model}")
+        print(f"  - Embedding Model: {settings.embedding_model}")
     print(f"  - Window Size: {settings.window_size}")
-    print(f"  - Transport: Streamable HTTP (2025-03-26)")
+    print("  - Transport: Streamable HTTP (2025-03-26)")
 
     # Start session cleanup task
     cleanup_task = asyncio.create_task(session_cleanup_task())
@@ -286,14 +349,42 @@ app.add_middleware(
 
 # === Authentication Endpoints ===
 
+
 @app.post("/api/auth/register", response_model=RegisterResponse)
 async def register(request: RegisterRequest):
     """Register a new user with API key (or placeholder for Ollama)"""
     try:
-        api_key = request.openrouter_api_key
+        # Determine which API key to use based on provider
+        if settings.llm_provider == "litellm":
+            api_key = request.litellm_api_key
+            if not api_key:
+                return RegisterResponse(
+                    success=False,
+                    error="litellm_api_key is required for LiteLLM provider",
+                )
 
-        # For Ollama, we don't need a real API key, use a placeholder
-        if settings.llm_provider == "ollama":
+            # Validate the LiteLLM API key
+            client = LiteLLMClient(
+                api_key=api_key,
+                base_url=settings.litellm_base_url,
+                llm_model=settings.litellm_llm_model,
+                embedding_model=settings.litellm_embedding_model,
+            )
+            is_valid, error = await client.verify_api_key()
+            await client.close()
+
+            if not is_valid:
+                return RegisterResponse(
+                    success=False,
+                    error=f"Invalid LiteLLM API key: {error}",
+                )
+
+            # Create user with LiteLLM key
+            user = User()
+            user.litellm_api_key_encrypted = token_manager.encrypt_api_key(api_key)
+
+        elif settings.llm_provider == "ollama":
+            api_key = request.openrouter_api_key
             if not api_key or api_key == "":
                 # Use a placeholder key for Ollama
                 api_key = "ollama-placeholder-key"
@@ -308,8 +399,20 @@ async def register(request: RegisterRequest):
                     success=False,
                     error=f"Cannot connect to Ollama: {error}",
                 )
+
+            # Create user
+            user = User()
+            user.openrouter_api_key_encrypted = token_manager.encrypt_api_key(api_key)
+
         else:
             # For OpenRouter, validate the API key
+            api_key = request.openrouter_api_key
+            if not api_key:
+                return RegisterResponse(
+                    success=False,
+                    error="openrouter_api_key is required for OpenRouter provider",
+                )
+
             client = OpenRouterClient(
                 api_key=api_key,
                 base_url=settings.openrouter_base_url,
@@ -323,9 +426,14 @@ async def register(request: RegisterRequest):
                     error=f"Invalid OpenRouter API key: {error}",
                 )
 
-        # Create user
-        user = User()
-        user.openrouter_api_key_encrypted = token_manager.encrypt_api_key(api_key)
+            # Create user
+            user = User()
+            user.openrouter_api_key_encrypted = token_manager.encrypt_api_key(api_key)
+
+        if request.embedding_api_key:
+            user.embedding_api_key_encrypted = token_manager.encrypt_api_key(
+                request.embedding_api_key
+            )
 
         # Save user
         user_store.create_user(user)
@@ -388,6 +496,7 @@ async def refresh_token(token: str = Query(..., description="Token to refresh"))
 
 # === Health & Info ===
 
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
@@ -416,17 +525,32 @@ async def server_info():
 
 # === MCP Protocol Endpoints (Streamable HTTP - 2025-03-26 spec) ===
 
-def _get_mcp_handler(user: User, api_key: str) -> MCPHandler:
+
+def _get_mcp_handler(
+    user: User,
+    llm_api_key: str,
+    embedding_api_key: str,
+    custom_table_suffix: Optional[str] = None,
+) -> MCPHandler:
     """Get or create MCP handler for user (legacy)"""
-    if user.user_id not in _mcp_handlers:
-        _mcp_handlers[user.user_id] = MCPHandler(
+    # For legacy support, we don't cache handlers with custom suffixes
+    cache_key = (
+        user.user_id
+        if not custom_table_suffix
+        else f"{user.user_id}_{custom_table_suffix}"
+    )
+
+    if cache_key not in _mcp_handlers:
+        _mcp_handlers[cache_key] = MCPHandler(
             user=user,
-            api_key=api_key,
+            llm_api_key=llm_api_key,
+            embedding_api_key=embedding_api_key,
             vector_store=vector_store,
             client_manager=client_manager,
             settings=settings,
+            custom_table_suffix=custom_table_suffix,
         )
-    return _mcp_handlers[user.user_id]
+    return _mcp_handlers[cache_key]
 
 
 def _is_initialize_request(data: dict | list) -> bool:
@@ -458,6 +582,7 @@ async def mcp_post_endpoint(
     request: Request,
     authorization: Optional[str] = Header(None),
     mcp_session_id: Optional[str] = Header(None, alias="Mcp-Session-Id"),
+    x_simplemem_table: Optional[str] = Header(None, alias="X-SimpleMem-Table"),
 ):
     """
     Streamable HTTP POST endpoint (MCP 2025-03-26 spec).
@@ -468,6 +593,7 @@ async def mcp_post_endpoint(
     - Authorization: Bearer <token> (required)
     - Accept: application/json, text/event-stream (required)
     - Mcp-Session-Id: <session-id> (required after initialization)
+    - X-SimpleMem-Table: <custom_table_suffix> (optional, for per-user table separation)
 
     Request body: JSON-RPC request, notification, response, or array of them.
 
@@ -484,8 +610,18 @@ async def mcp_post_endpoint(
         )
 
     # Authenticate
-    user, api_key = await verify_bearer_token(authorization)
+    user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
     user_store.update_last_active(user.user_id)
+
+    # Validate custom table suffix if provided
+    custom_table_suffix = None
+    if x_simplemem_table:
+        if not validate_table_suffix(x_simplemem_table):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid X-SimpleMem-Table header. Must be alphanumeric, underscore, or hyphen, max 64 chars.",
+            )
+        custom_table_suffix = x_simplemem_table
 
     # Parse request body
     try:
@@ -502,7 +638,12 @@ async def mcp_post_endpoint(
 
     # Handle initialization (creates new session)
     if _is_initialize_request(data):
-        session = await get_or_create_session(user, api_key)
+        session = await get_or_create_session(
+            user,
+            llm_api_key,
+            embedding_api_key,
+            custom_table_suffix=custom_table_suffix,
+        )
         session.initialized = True
 
         # Process the initialize request
@@ -527,14 +668,23 @@ async def mcp_post_endpoint(
     if not session:
         # Auto-create new session for expired sessions (MCP client compatibility)
         # This allows MCP clients to seamlessly recover from expired sessions
-        session = await get_or_create_session(user, api_key)
+        session = await get_or_create_session(
+            user,
+            llm_api_key,
+            embedding_api_key,
+            custom_table_suffix=custom_table_suffix,
+        )
         session.initialized = True
         # Optionally log the session recovery
-        print(f"Auto-recovered expired session for user {user.user_id}, new session_id: {session.session_id}")
+        print(
+            f"Auto-recovered expired session for user {user.user_id}, new session_id: {session.session_id}"
+        )
 
     # Verify session belongs to this user
     if session.user_id != user.user_id:
-        raise HTTPException(status_code=403, detail="Session does not belong to this user")
+        raise HTTPException(
+            status_code=403, detail="Session does not belong to this user"
+        )
 
     # If only notifications or responses, return 202 Accepted
     if _is_notification_or_response_only(data):
@@ -580,7 +730,7 @@ async def mcp_get_endpoint(
         )
 
     # Authenticate
-    user, api_key = await verify_bearer_token(authorization)
+    user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
 
     # Session ID required for GET
     if not mcp_session_id:
@@ -599,7 +749,9 @@ async def mcp_get_endpoint(
 
     # Verify session belongs to this user
     if session.user_id != user.user_id:
-        raise HTTPException(status_code=403, detail="Session does not belong to this user")
+        raise HTTPException(
+            status_code=403, detail="Session does not belong to this user"
+        )
 
     # Generate unique stream ID
     stream_id = secrets.token_urlsafe(16)
@@ -658,7 +810,7 @@ async def mcp_delete_endpoint(
     - Mcp-Session-Id: <session-id> (required)
     """
     # Authenticate
-    user, api_key = await verify_bearer_token(authorization)
+    user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
 
     if not mcp_session_id:
         raise HTTPException(status_code=400, detail="Mcp-Session-Id header required")
@@ -669,7 +821,9 @@ async def mcp_delete_endpoint(
         raise HTTPException(status_code=404, detail="Session not found")
 
     if session.user_id != user.user_id:
-        raise HTTPException(status_code=403, detail="Session does not belong to this user")
+        raise HTTPException(
+            status_code=403, detail="Session does not belong to this user"
+        )
 
     # Delete session
     await delete_session(mcp_session_id)
@@ -678,6 +832,7 @@ async def mcp_delete_endpoint(
 
 # === Legacy MCP Endpoints (HTTP+SSE - 2024-11-05 spec) ===
 # Kept for backwards compatibility with older clients
+
 
 @app.get("/mcp/sse")
 async def mcp_sse_endpoint_legacy(
@@ -696,7 +851,7 @@ async def mcp_sse_endpoint_legacy(
     """
     # Try to get token from header first, then query param
     if authorization:
-        user, api_key = await verify_bearer_token(authorization)
+        user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
     elif token:
         is_valid, payload, error = token_manager.verify_token(token)
         if not is_valid:
@@ -704,12 +859,19 @@ async def mcp_sse_endpoint_legacy(
         user = user_store.get_user(payload.user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+        llm_api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+        # Use embedding API key if set, otherwise fall back to LLM API key
+        if user.embedding_api_key_encrypted:
+            embedding_api_key = token_manager.decrypt_api_key(
+                user.embedding_api_key_encrypted
+            )
+        else:
+            embedding_api_key = llm_api_key
     else:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     # Create session for legacy client
-    session = await get_or_create_session(user, api_key)
+    session = await get_or_create_session(user, llm_api_key, embedding_api_key)
 
     # Get base URL
     base_url = os.getenv("MCP_BASE_URL", "")
@@ -761,15 +923,15 @@ async def mcp_message_endpoint_legacy(
 
     # Try to authenticate and get session
     if authorization:
-        user, api_key = await verify_bearer_token(authorization)
+        user, llm_api_key, embedding_api_key = await verify_bearer_token(authorization)
         if sid:
             session = await get_session(sid)
             if session and session.user_id == user.user_id:
                 handler = session.handler
             else:
-                handler = _get_mcp_handler(user, api_key)
+                handler = _get_mcp_handler(user, llm_api_key, embedding_api_key)
         else:
-            handler = _get_mcp_handler(user, api_key)
+            handler = _get_mcp_handler(user, llm_api_key, embedding_api_key)
     elif token:
         is_valid, payload, error = token_manager.verify_token(token)
         if not is_valid:
@@ -777,8 +939,15 @@ async def mcp_message_endpoint_legacy(
         user = user_store.get_user(payload.user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
-        handler = _get_mcp_handler(user, api_key)
+        llm_api_key = token_manager.decrypt_api_key(user.openrouter_api_key_encrypted)
+        # Use embedding API key if set, otherwise fall back to LLM API key
+        if user.embedding_api_key_encrypted:
+            embedding_api_key = token_manager.decrypt_api_key(
+                user.embedding_api_key_encrypted
+            )
+        else:
+            embedding_api_key = llm_api_key
+        handler = _get_mcp_handler(user, llm_api_key, embedding_api_key)
     elif sid:
         # Try to get session by ID
         session = await get_session(sid)
@@ -812,14 +981,18 @@ async def serve_frontend():
     if os.path.exists(index_path):
         with open(index_path, "r") as f:
             return HTMLResponse(content=f.read())
-    return HTMLResponse(content="<h1>SimpleMem MCP Server</h1><p>Frontend not found.</p>")
+    return HTMLResponse(
+        content="<h1>SimpleMem MCP Server</h1><p>Frontend not found.</p>"
+    )
 
 
 # === Entry Point ===
 
+
 def run_server(host: str = "0.0.0.0", port: int = 8000):
     """Run the HTTP server"""
     import uvicorn
+
     uvicorn.run(app, host=host, port=port)
 
 
